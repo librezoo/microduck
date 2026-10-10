@@ -11,6 +11,11 @@ documentation as much as a tool, and the app's `ShowAdapter` makes the same call
 import argparse, hashlib, json, sys, time, urllib.error, urllib.request, wave
 
 
+# No proxy: a duck is on the LAN, and a system-wide proxy (which `urllib` honours on macOS) will
+# answer for it with a closed connection.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def call(base, token, method, path, body=None, headers=None):
     req = urllib.request.Request(base + "/api/v1" + path, data=body, method=method)
     if token:
@@ -20,7 +25,7 @@ def call(base, token, method, path, body=None, headers=None):
     if body is not None and "Content-Type" not in (headers or {}):
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with OPENER.open(req, timeout=300) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         try:

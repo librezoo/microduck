@@ -16,8 +16,10 @@ use showd::store::Store;
 #[derive(Parser)]
 #[command(version)]
 struct Args {
-    /// Where to listen. 8765 is what Kivi Studio's LAN adapter defaults to.
-    #[arg(long, default_value = "0.0.0.0:8765")]
+    /// Where to listen. 8767, not Kivi Studio's default 8765: on a robot that port belongs to the
+    /// live-twin service (`microduck-twin`), and Studio's own device service moved to 8767 for the
+    /// same reason. The app takes the port with the address.
+    #[arg(long, default_value = "0.0.0.0:8767")]
     listen: SocketAddr,
     /// The library and the pairing state.
     #[arg(long, default_value = "/var/lib/showd")]

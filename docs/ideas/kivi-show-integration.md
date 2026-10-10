@@ -27,7 +27,7 @@
 |---|---|
 | 编辑模型 | `SoundEvent{ startBeat, durationBeats, voice(ah/eh/ee/oh/oo/mm), midiNote, volume, continuesPrevious }`；`ActionEvent{ actionId, startMs, durationMs, source }`，动作严格串行；速度 `tempoBpm` 恒定 |
 | 声音 | 浏览器里用 WASM 跑官方 `sounds` 合成器渲染歌声（固定种子），并加默认的音间断句；**上传的是已混好的单个 WAV** |
-| LAN 适配器 | 在 `codex/mobile-single-page`：`http://<鸭>:8765/api/v1` — `POST /pair`、`GET /info`、`GET /snapshot`、`PUT /songs/{id}`（`audio/wav`，带 `X-Base-Revision`）、`POST /control`（play/pause/resume/stop/seek/volume）；Bearer 令牌；快照带 `bootId/sequence/version` 防乱序 |
+| LAN 适配器 | 在 `codex/mobile-single-page`：`http://<鸭>:8765/api/v1`（鸭子侧的 Orange Pi 服务实际用 8767，因为 8765 被数字孪生占用） — `POST /pair`、`GET /info`、`GET /snapshot`、`PUT /songs/{id}`（`audio/wav`，带 `X-Base-Revision`）、`POST /control`（play/pause/resume/stop/seek/volume）；Bearer 令牌；快照带 `bootId/sequence/version` 防乱序 |
 | 配网 | 自有 BLE GATT（UUID `b9b6…`）：发现→`bind.begin`（鸭子嘎嘎两声）→按键确认→Wi-Fi 扫描/连接→`network.endpoint` 回地址 |
 | 设备侧 | `device/audio-service`、`device/studio-service`（Python，**Orange Pi**）：收歌、`mpv`/ALSA 播放、曲库；**没有动作、舵机、robotd 接口** |
 | 协议仓库 | `kivi-device-protocol` 的 schema 还是 **`ki`/`ka`** 音节、整份编排 base64 内联上传（上限 1 MiB）、`start_score` 带 `startAtUnixMs` ——**与 Studio 现状已经脱节** |
@@ -133,7 +133,7 @@ shows/<showId>/
                           └─ 本机 unix socket JSON-RPC ──→ robotd（唯一关节所有者）
 ```
 
-**新增一个守护进程 `showd`（Rust）**，而不是往 `robotd` 里塞 HTTP：`robotd` 是控制环，不该有对外网络面；`mediad` 是视频，职责也不对。
+**新增一个守护进程 `showd`（Rust），监听 8767**（8765 在官方鸭子上被 `microduck-twin` 占用，Kivi 自己的设备服务也已经改用 8767；App 连接时带端口即可），而不是往 `robotd` 里塞 HTTP：`robotd` 是控制环，不该有对外网络面；`mediad` 是视频，职责也不对。
 `showd` 只做三件事：**接收并校验包、保存曲库、把"播放"翻译成对 `robotd` 的调用**。这与 `btd` 对 `robotd` 的关系一样。
 
 为什么不复用 WebRTC `control` 通道：它是 JSON 行，传文件要 base64（体积 +33%）且数据通道单条消息有上限；
@@ -328,3 +328,24 @@ idle ─ play ─→ lead-in(1.5 s: 嘴闭、头吸气) ─→ playing ─ 结�
 - `robot.sing` 已支持 `mute`（只动嘴头）和 `performance`（外部描述），可以直接作为 K2 的内部调用，`showd` 只需把 `duck` 轨编译好后调用它。
 - 真机已验证：坐姿下嘴头跟随、声音、延迟补偿（嘴约 150 ms、头约 250 ms）。
 - **缺的：** 播放 WAV 的音频写入者、动作执行器、`showd`、`from_notes`，以及全部的契约和测试夹具。
+
+## 9. 实现状态（2026-10-10）
+
+| 里程碑 | 状态 | 说明 |
+|---|---|---|
+| **K0 契约** | **已做** | `show` crate：`kivi.show/2` manifest、`kivi.duck/1`、`kivi.motion/1`、capabilities、校验与错误码；黄金包 `show/tests/golden/`；`singer::from_notes`（乐谱与 Kivi 音符谱共用一个前端，含 Studio 的音间断句规则） |
+| **K1 最短通路** | **已做，真机已验证** | `showd`（Rust，端口 **8767**）：Kivi v1 接口原样（`/pair`、`/info`、`/snapshot`、`PUT /songs/{id}`、`/control`）；`robotd` 增加 WAV 播放、`robot.singControl`（pause/resume/seek/volume）。在 Radxa 真机上，从笔记本经 Wi-Fi 配对→上传 1 MB 音频 0.2 s→发布→播放→结束，音频已起播 |
+| **K2 多轨** | **大部分已做** | 分轨上传 + 哈希校验 + 原子 `commit`（只重传变化的轨）；`duck`→`singer`；动作执行器：`skill`（带姿态确认）、`head`（在 `robotd` 内）、`body`、`walk`；`PoseMismatch/ActionUnsupported/OutOfRange/Overlap/TooFast/TooShort` 提交时校验；播放中跌倒/越界/被抬起则停止并回报；pause/seek 只在动作之间且不跨姿态变化。**在 MuJoCo 里用真实 `robotd` 跑通了一整套**：站→坐（`sit_toggle`）→头部看四周→起身→机身摇摆→走路→站，无中止，pause/seek 的拒绝全部按设计 |
+| K2 未做 | | `/events` WebSocket 常连接（现在是轮询 `/snapshot`，与 Kivi 现有适配器一致）；`expression` 补丁轨；`audio` 的 `backing` 角色 |
+| K3 同步 | 部分 | 延迟补偿参数（嘴 150 ms、头 250 ms，来自第一只鸭子的坐姿实测）已接入；音频延迟回环标定未做 |
+| K4 配对与安全 | **未做** | 现在是调试配对（8 位码换令牌，明文 HTTP）；按键确认 + 逐客户端令牌（`btd`/`configd`）、LAN 加密都没做。**不要把它当成安全的** |
+
+**联调时要知道的：**
+
+- 地址 `<鸭子IP>:8767`；配对码在鸭子上 `sudo cat /var/lib/showd/pair-code`（首次启动生成，也写在 `journalctl -u showd` 里）。
+- 8765 在官方鸭子上被 `microduck-twin` 占用，所以 showd 用 8767（与 Kivi 自己的 Studio 设备服务一致）。
+- **macOS 上用 Python `urllib` 会读系统代理**，对局域网地址返回"连接被关闭"；`showd/tools/push_show.py` 已绕开。手机 App 不受影响，但开发机上的脚本要注意。
+- 每次更新 `robotd` 都会让机器人松力矩，更新后要 `robotctl robot init` → `enable`（坐姿再 `do sit_toggle`）。
+- 板子上的 `updaterd` 默认停用，部署时要临时启动。
+- 参考客户端：`showd/tools/push_show.py`（标准库，按 App 会做的顺序调用）。
+
