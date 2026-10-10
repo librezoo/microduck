@@ -349,3 +349,24 @@ idle ─ play ─→ lead-in(1.5 s: 嘴闭、头吸气) ─→ playing ─ 结�
 - 板子上的 `updaterd` 默认停用，部署时要临时启动。
 - 参考客户端：`showd/tools/push_show.py`（标准库，按 App 会做的顺序调用）。
 
+### 9.1 与 Studio 自己代码的联调结果（2026-10-10）
+
+在一个干净检出的 `kivi-studio`（`codex/mobile-single-page`）里，用它**自己的 `LanAudioAdapter`**（jsdom 里的真 XHR/fetch，因此跨域预检也是真的）对 `showd` 跑了完整流程，**仿真和真机各一遍都通过**：配对 → 身份预检 → 上传 48 kHz 立体声 WAV（带进度）→ 播放 → 暂停 → 继续 → 跳转 → 音量 → 停止 → 用旧版本号播放被拒且提示是中文句子。
+
+联调中补上的、与 Studio 自己设备服务对齐的细节：
+
+| 项 | 处理 |
+|---|---|
+| CORS | 回显 `http(s)/capacitor/tauri` 来源；预检 `OPTIONS` 返回 204；`Access-Control-Allow-Private-Network: true`（Chrome 访问内网地址要这个"同意"） |
+| 错误文案 | `error` 字段是中文句子（Studio 直接显示它），`code` 和 `problems` 给 App 做逻辑 |
+| 配对 | 错码返回 401；码不区分大小写 |
+| `updatedAt` | 秒（浮点），与 Studio 自己的服务一致 |
+| 状态延迟 | 暂停/继续/跳转后，应答先按请求的结果回报，等机器人状态确认再切回实际值（机器人状态流有约 100 ms 延迟，否则按钮会显示错） |
+| 姿态 | 从**左膝关节角**判断（≥0.8 rad 坐，≤0.25 rad 站，中间"过渡中"拒绝），不再信策略标签——真机上出现过标签为 `sit` 而腿是站立的情况 |
+
+参考实现与测试（都在 `showd/tools/app/`，供 App 侧移植，不是依赖）：
+
+- `showAdapter.ts`：多轨 `ShowAdapter`（只传变化的轨 + 哈希 + 提交 + 播放，被拒时带出出错的事件）。
+- `studioAdapter.live.test.ts`、`showAdapter.live.test.ts`：对着一个运行中的 `showd` 跑，用环境变量 `SHOWD_ADDRESS`、`SHOWD_CODE` 指定。注意要加 `--no-file-parallelism`，两个测试同时放会抢同一只鸭子。
+
+**尚未与 Studio 的真实界面联调**（没有跑它的 UI）；已验证的是它的适配器代码。
