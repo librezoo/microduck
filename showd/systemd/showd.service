@@ -1,0 +1,57 @@
+# showd — the show library and playback service (the Kivi Studio integration).
+#
+# Install to /etc/systemd/system/showd.service.
+#
+# It receives songs from an app over the LAN, keeps them, and plays them by asking `robotd`. It owns
+# no hardware. That is the point of it being its own service: `robotd` is the control loop and has
+# no business with an HTTP listener, and an app that sends it a malformed song must not be able to
+# take the control loop down. A crash here costs the app a connection and nothing else.
+#
+# No dependency in either direction that the robot needs: `robotd` stands up and holds its joints
+# whether or not this runs, and this starts without `robotd` and says "unreachable" until it does.
+#
+# Design: docs/ideas/kivi-show-integration.md.
+
+[Unit]
+Description=Show library and playback service
+Documentation=file:///opt/robot/daemon/current/docs/architecture.md
+After=robotd.service local-fs.target
+
+[Service]
+Type=exec
+ExecStart=/opt/robot/daemon/current/bin/showd --data /var/lib/showd --robot-socket /run/robotd.sock
+
+User=showd
+Group=showd
+# The sockets of robotd and friends are 0660 root:robot.
+SupplementaryGroups=robot
+
+# /var/lib/showd: the library, the pairing code and the tokens. `robotd` (root) reads the audio
+# under it, which is why this is a directory it can be told about (`DUCK_SHOW_ROOT`).
+StateDirectory=showd
+StateDirectoryMode=0750
+
+Restart=always
+RestartSec=3s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+
+Environment=RUST_LOG=showd=info
+StandardOutput=journal
+StandardError=journal
+
+# `units_shipped` in `updater/src/engine.rs` restarts every unit with an [Install] section on an
+# apply, and `postinstall` enables it on its first release: one rule, read off the unit files.
+[Install]
+WantedBy=multi-user.target

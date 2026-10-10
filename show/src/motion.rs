@@ -69,7 +69,7 @@ pub struct MotionTrack {
     pub actions: Vec<Action>,
 }
 
-fn keys_t<'a>(kind: &'a ActionKind) -> Vec<u64> {
+fn keys_t(kind: &ActionKind) -> Vec<u64> {
     match kind {
         ActionKind::Skill { .. } => vec![],
         ActionKind::Head { keyframes } => keyframes.iter().map(|k| k.t_ms).collect(),
@@ -320,8 +320,8 @@ fn max_speed(keys: impl Iterator<Item = (u64, [f32; 4])>) -> Option<[f32; 4]> {
     let mut m = [0.0f32; 4];
     for w in v.windows(2) {
         let dt = (w[1].0.saturating_sub(w[0].0)).max(1) as f32 / 1000.0;
-        for j in 0..4 {
-            m[j] = m[j].max(((w[1].1[j] - w[0].1[j]) / dt).abs());
+        for (j, slot) in m.iter_mut().enumerate() {
+            *slot = slot.max(((w[1].1[j] - w[0].1[j]) / dt).abs());
         }
     }
     Some(m)

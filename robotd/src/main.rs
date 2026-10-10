@@ -3482,7 +3482,15 @@ async fn control_loop<T: RobotIo>(
             }
         }
         if let Some(p) = performer.as_mut() {
-            if chorale_state.is_some() || theremin_state.is_some() {
+            // A fall, a limp-down or a lift ends a performance outright: nothing about a show is
+            // worth continuing for, and the beak and head go to rest through the same release as
+            // any other stop.
+            if chorale_state.is_some()
+                || theremin_state.is_some()
+                || in_limp_fall
+                || pickup_paused
+                || safety.fallen()
+            {
                 p.stop();
             }
             let step = p.tick(tick_start, period.as_secs_f32());

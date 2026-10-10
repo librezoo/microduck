@@ -142,7 +142,10 @@ impl DuckScore {
         sorted.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
         let mut prev_end = 0.0f64;
         for e in &sorted {
-            if !e.start_beat.is_finite() || e.start_beat < 0.0 || !(e.duration_beats > 0.0) {
+            if !e.start_beat.is_finite()
+                || e.start_beat < 0.0
+                || e.duration_beats.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+            {
                 p.push(
                     Problem::new("Corrupt", "a note has a bad start or duration").at(&e.event_id),
                 );
@@ -162,7 +165,9 @@ impl DuckScore {
             prev_end = prev_end.max(e.start_beat + e.duration_beats);
         }
         for s in &self.sections {
-            if !(s.end_beat > s.start_beat) || s.start_beat < 0.0 {
+            if s.end_beat.partial_cmp(&s.start_beat) != Some(std::cmp::Ordering::Greater)
+                || s.start_beat < 0.0
+            {
                 p.push(Problem::new("Corrupt", "a section has a bad range"));
             }
         }
@@ -184,6 +189,16 @@ impl DuckScore {
     /// The ends of the notes follow Studio's own render (`EndRule::Articulated`): the beak has to
     /// agree with what the mixed audio actually sounds like.
     pub fn to_performance(&self, name: &str) -> Result<Performance, Problems> {
+        self.to_performance_for(name, 0.0)
+    }
+
+    /// As [`Self::to_performance`], but the performance lasts at least `min_duration_s`: a show
+    /// whose audio outlasts its last note must not be cut off when the singing is over.
+    pub fn to_performance_for(
+        &self,
+        name: &str,
+        min_duration_s: f32,
+    ) -> Result<Performance, Problems> {
         self.validate(usize::MAX)?;
         let mut sorted: Vec<&NoteEvent> = self.events.iter().collect();
         sorted.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
@@ -216,7 +231,13 @@ impl DuckScore {
             p.push(Problem::new("Corrupt", "the duck track has no notes"));
             return Err(p);
         }
-        let perf = singer::from_notes(&notes, &opts);
+        let mut perf = singer::from_notes(&notes, &opts);
+        if min_duration_s > perf.duration {
+            perf.duration = min_duration_s;
+            if let Some(last) = perf.sections.last_mut() {
+                last.end = last.end.max(min_duration_s);
+            }
+        }
         perf.validate().map_err(|e| {
             let mut p = Problems::default();
             p.push(Problem::new("Corrupt", e.to_string()));

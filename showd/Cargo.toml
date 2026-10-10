@@ -1,0 +1,35 @@
+# The show service: how a song gets from an app onto the duck and is played.
+#
+# Speaks the LAN API Kivi Studio already has (`/api/v1`: pair, info, snapshot, songs, control) and
+# adds the multi-track show endpoints beside it. Holds the library on disk, verifies every track
+# by hash, publishes a show atomically, and turns "play" into calls on `robotd` — which stays the
+# only owner of the joints and of the speaker. Design: `docs/ideas/kivi-show-integration.md`.
+[package]
+name = "showd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Show library and playback service for the Kivi Studio integration"
+
+[dependencies]
+show = { path = "../show" }
+singer = { path = "../singer" }
+duck-ipc-proto = { path = "../duck-ipc-proto" }
+anyhow = "1"
+async-trait.workspace = true
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "query"] }
+clap = { workspace = true, features = ["derive"] }
+futures-util = "0.3"
+getrandom = "0.3"
+hound.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.0"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "fs", "sync", "signal"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

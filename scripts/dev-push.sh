@@ -346,6 +346,9 @@ cp "$BIN"/padd staged/
 # The WebRTC gateway. Its unit ships with an `[Install]` section, so postinstall enables and starts
 # it and `on_apply` restarts it, exactly as for every other daemon here.
 cp "$BIN"/mediad staged/
+# The show service (Kivi Studio integration): library and playback over the LAN. Unprivileged;
+# it asks `robotd` to play and owns no hardware.
+cp "$BIN"/showd staged/
 # The voice generator (postinstall renders the per-robot bank with it) and the
 # mic classifier pair — pet-detect for live listening, pet-features for training.
 cp "$BIN"/sounds staged/
@@ -396,6 +399,8 @@ cargo run -p xtask -- package \
     --include "padd/systemd/sysusers.d/padd.conf=systemd/sysusers.d/padd.conf" \
     --include "mediad/systemd/mediad.service=systemd/mediad.service" \
     --include "mediad/systemd/sysusers.d/mediad.conf=systemd/sysusers.d/mediad.conf" \
+    --include "showd/systemd/showd.service=systemd/showd.service" \
+    --include "showd/systemd/sysusers.d/showd.conf=systemd/sysusers.d/showd.conf" \
     --include "tof/systemd/tofd.service=systemd/tofd.service" \
     --include "tof/systemd/sysusers.d/tofd.conf=systemd/sysusers.d/tofd.conf" \
     --include "deploy/journald.conf.d/10-robot.conf=deploy/journald.conf.d/10-robot.conf" \
@@ -504,7 +509,7 @@ echo "    current -> $want"
 # no socket at all, so for that one it is the only answer available.
 deadline=$(($(date +%s) + 30))
 stale=""
-for svc in robotd configd padd updaterd btd mediad tofd; do
+for svc in robotd configd padd updaterd btd mediad showd tofd; do
     while :; do
         if [ ! -f "/run/${svc}/identity.json" ]; then
             state="silent"
