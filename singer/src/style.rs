@@ -54,6 +54,17 @@ pub struct MouthStyle {
     /// percent for a step of a tone or two. 0 = off.
     #[serde(default)]
     pub interval_gain: f32,
+    /// Fit the opening to *this song*: after the per-syllable openings are worked out, rescale them
+    /// so the wide ones (the 90th percentile by duration) reach 0.95 and the spread between narrow
+    /// and wide is wide enough to see, whatever vowels, range and loudness the song happens to
+    /// have. A song sung mostly on "ah" is not left pinned at full open, one on "oo" is not left
+    /// looking shut. `gain` then scales the result (it is the calibration knob, `mouth_scale`).
+    #[serde(default)]
+    pub auto_range: bool,
+    /// With `auto_range`: how far each syllable is pulled toward the song's own mean opening
+    /// first, 0..1 (the vowel shape is kept, but it stops dominating).
+    #[serde(default)]
+    pub flatten: f32,
     /// A held vowel pulses with the beat: the period is this many beats (or half of it, chosen per
     /// syllable), and `drift` is its depth. 0 = the old slow breathing drift.
     #[serde(default)]
@@ -136,6 +147,8 @@ impl Style {
                 closure_gap: 0.10,
                 anticipation: 0.05,
                 interval_gain: 0.0,
+                auto_range: false,
+                flatten: 0.0,
                 pulse_beats: 0.0,
                 drift_after: 0.9,
                 settle: 0.14,
@@ -181,6 +194,8 @@ impl Style {
                 closure_gap: 0.07,
                 anticipation: 0.04,
                 interval_gain: 0.0,
+                auto_range: false,
+                flatten: 0.0,
                 pulse_beats: 0.0,
                 drift_after: 0.9,
                 settle: 0.10,
@@ -221,7 +236,7 @@ impl Style {
         Self {
             name: "lively".into(),
             mouth: MouthStyle {
-                gain: 1.55,
+                gain: 1.0,
                 pitch_gain: 0.30,
                 level_gain: 0.30,
                 climax_open: 0.55,
@@ -230,6 +245,8 @@ impl Style {
                 closure_gap: 0.06,
                 anticipation: 0.04,
                 interval_gain: 0.28,
+                auto_range: true,
+                flatten: 0.3,
                 pulse_beats: 1.0,
                 drift_after: 0.4,
                 settle: 0.28,
@@ -276,6 +293,8 @@ impl Style {
                 closure_gap: 0.05,
                 anticipation: 0.03,
                 interval_gain: 0.0,
+                auto_range: false,
+                flatten: 0.0,
                 pulse_beats: 0.0,
                 drift_after: 0.9,
                 settle: 0.05,

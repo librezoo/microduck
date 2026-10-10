@@ -149,6 +149,47 @@ fn target_open(perf: &Performance, s: &Syllable, st: &MouthStyle) -> f32 {
     (base + lift).clamp(st.floor_open, 1.0)
 }
 
+/// Rescale a song's openings so the wide ones reach 0.95 and the narrow ones are far enough from
+/// them to see (see `MouthStyle::auto_range`). Humming syllables keep their own (almost shut)
+/// opening and stay out of the statistics. Bounded, so a song with little variation is not
+/// stretched into noise.
+fn fit_to_song(opens: &mut [f32], sy: &[Syllable], st: &MouthStyle) {
+    let sung: Vec<usize> = (0..opens.len()).filter(|&i| sy[i].vowel != Vowel::Mm).collect();
+    if sung.len() < 8 {
+        for o in opens.iter_mut() {
+            *o = (*o * st.gain).clamp(0.0, 1.0);
+        }
+        return;
+    }
+    let weight = |i: usize| (sy[i].end - sy[i].start).max(0.05);
+    let total: f32 = sung.iter().map(|&i| weight(i)).sum();
+    let mean = sung.iter().map(|&i| opens[i] * weight(i)).sum::<f32>() / total;
+    for &i in &sung {
+        opens[i] = opens[i] * (1.0 - st.flatten) + mean * st.flatten;
+    }
+    let pct = |opens: &[f32], q: f32| {
+        let mut v: Vec<(f32, f32)> = sung.iter().map(|&i| (opens[i], weight(i))).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut acc = 0.0;
+        for (o, w) in &v {
+            acc += w;
+            if acc >= q * total {
+                return *o;
+            }
+        }
+        v.last().map_or(0.0, |x| x.0)
+    };
+    let (p10, p90) = (pct(opens, 0.1), pct(opens, 0.9));
+    let spread = (p90 - p10).max(0.15);
+    let k = ((1.05 - 0.55) / spread).clamp(0.8, 2.0);
+    for &i in &sung {
+        opens[i] = (1.05 - (p90 - opens[i]) * k).clamp(st.floor_open, 1.0);
+    }
+    for o in opens.iter_mut() {
+        *o = (*o * st.gain).clamp(0.0, 1.0);
+    }
+}
+
 /// How much the style's legato dip is scaled by what precedes the vowel. A lip consonant (b, p,
 /// m, f) shuts the beak whatever the style; a vowel-initial syllable hardly dips.
 fn onset_factor(o: Onset) -> f32 {
@@ -181,7 +222,14 @@ pub fn compile(
     // Silence since the last closure, for the breath cue.
     let mut gap_before = sy.first().map_or(0.0, |s| s.start);
 
-    let mut opens: Vec<f32> = sy.iter().map(|s| target_open(perf, s, st)).collect();
+    let mut opens: Vec<f32> = if st.auto_range {
+        let unit = MouthStyle { gain: 1.0, ..*st };
+        let mut o: Vec<f32> = sy.iter().map(|s| target_open(perf, s, &unit)).collect();
+        fit_to_song(&mut o, sy, st);
+        o
+    } else {
+        sy.iter().map(|s| target_open(perf, s, st)).collect()
+    };
     for (o, s) in opens.iter_mut().zip(sy) {
         if s.confidence < 1.0 {
             stats.low_confidence += usize::from(s.confidence < 0.5);

@@ -94,3 +94,33 @@ fn a_run_up_opens_the_beak_wider_and_a_run_down_narrows_it() {
     let (a, b) = run_openings(67, 60);
     assert!(b < a - 0.1, "down: {a} -> {b}");
 }
+
+/// Opening percentiles while singing, for a song of 40 one-beat notes on one vowel and a gentle
+/// melody, in the lively style.
+fn song_opening(vowel: &str) -> (f32, f32) {
+    let notes: Vec<String> = (0..40)
+        .map(|i| {
+            let (m, s) = (60 + [0, 2, 4, 2, 0, -2, 0, 3][i % 8], i as f64 * 500.0);
+            format!(
+                r#"{{"eventId":"n{i}","startBeat":{i},"durationBeats":1,"voice":"{vowel}","midiNote":{m},"volume":0.8,"sounding":[[{s},{e}]]}}"#,
+                e = s + 420.0
+            )
+        })
+        .collect();
+    let perf = score(&notes.join(",")).to_performance("t").unwrap();
+    let style = singer::Style::by_name("lively").unwrap();
+    let show = singer::Show::compile(perf, style, singer::Profile::default()).unwrap();
+    let mut v: Vec<f32> = show.mouth.iter().cloned().filter(|x| *x > 0.05).collect();
+    v.sort_by(f32::total_cmp);
+    (v[v.len() / 2], v[v.len() * 9 / 10])
+}
+
+#[test]
+fn every_song_gets_a_wide_mouth_whatever_vowel_it_is_sung_on() {
+    let (ah50, ah90) = song_opening("ah");
+    let (oo50, oo90) = song_opening("oo");
+    assert!(ah90 > 0.8 && oo90 > 0.8, "wide ones reach the top: ah {ah90}, oo {oo90}");
+    assert!((ah90 - oo90).abs() < 0.12, "same reach for both: {ah90} vs {oo90}");
+    assert!(oo50 > 0.45, "a song on oo does not look shut: median {oo50}");
+    assert!(ah50 < 0.95, "a song on ah is not pinned open: median {ah50}");
+}
