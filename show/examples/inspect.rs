@@ -13,7 +13,8 @@ fn main() {
     let mut dips = Vec::new();
     for w in perf.syllables.windows(2) {
         let (a, b) = (&w[0], &w[1]);
-        let (t0, t1) = ((a.end * 50.0) as usize, (b.start * 50.0) as usize + 1);
+        // The dip can start before the sound ends and end after the next one begins.
+        let (t0, t1) = (((a.end - 0.2).max(a.start) * 50.0) as usize, ((b.start + 0.1) * 50.0) as usize + 1);
         let lo = show.mouth[t0.min(show.mouth.len() - 1)..=t1.min(show.mouth.len() - 1)]
             .iter()
             .cloned()
@@ -30,5 +31,6 @@ fn main() {
     for (gap, lo, peak) in &dips {
         println!("  gap {gap:5.2} s → beak down to {lo:.2} (from {peak:.2})");
     }
-    println!("{closed} of {} boundaries close to below 0.2", dips.len());
+    let dipped = dips.iter().filter(|(_, lo, peak)| peak - lo >= 0.15).count();
+    println!("{closed} of {} boundaries close to below 0.2; {dipped} dip by at least 0.15", dips.len());
 }

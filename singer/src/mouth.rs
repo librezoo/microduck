@@ -42,6 +42,8 @@ const DESIGN: f32 = 0.85;
 /// the limit itself.
 pub const CEILING: f32 = 0.85;
 /// The jaw reaches the vowel this long after the sound begins, before anticipation.
+/// How far past the next syllable's start a dip between touching syllables may finish, seconds.
+const LEGATO_LATE: f32 = 0.08;
 const ATTACK: f32 = 0.03;
 /// Shortest transition worth commanding, seconds.
 const MIN_T: f32 = 0.04;
@@ -143,11 +145,13 @@ fn target_open(perf: &Performance, s: &Syllable, st: &MouthStyle) -> f32 {
     (base + lift).clamp(st.floor_open, 1.0)
 }
 
+/// How much the style's legato dip is scaled by what precedes the vowel. A lip consonant (b, p,
+/// m, f) shuts the beak whatever the style; a vowel-initial syllable hardly dips.
 fn onset_factor(o: Onset) -> f32 {
     match o {
-        Onset::Closure => 1.0,
-        Onset::Soft => 0.6,
-        Onset::None => 0.3,
+        Onset::Closure => 2.2,
+        Onset::Soft => 1.6,
+        Onset::None => 0.9,
     }
 }
 
@@ -296,7 +300,18 @@ pub fn compile(
             Some(next) => {
                 let gap = (next.start - b).max(0.0);
                 let o_next = opens[i + 1];
-                let r_next = arrival(next);
+                // Where the join has to be open again. Two syllables that touch have no silence to
+                // dip in, so the consonant between them is shown as a quick dip that is allowed to
+                // finish a little *after* the next vowel begins, as a real consonant does: the
+                // vowel starts while the lips are still coming apart. The next syllable's own
+                // opening then lands late rather than not at all.
+                let lips = next.onset == Onset::Closure;
+                let late = if gap < st.closure_gap && !next.tie {
+                    if lips { 1.5 * LEGATO_LATE } else { LEGATO_LATE }
+                } else {
+                    0.0
+                };
+                let r_next = arrival(next) + late;
                 let closed = gap >= st.closure_gap && !next.tie;
                 let low = o.min(o_next);
                 // How deep the valley between the two vowels is asked to go: all the way for a
@@ -307,7 +322,7 @@ pub fn compile(
                 } else if closed {
                     0.0
                 } else {
-                    (low - st.legato_dip * low * onset_factor(next.onset)).max(0.0)
+                    (low - (st.legato_dip * onset_factor(next.onset)).min(0.95) * low).max(0.0)
                 };
                 // …and how deep the mechanism lets it go in the time there is. A held vowel is held
                 // to nearly the end of the sound, so the close-and-open has to fit between
@@ -344,9 +359,10 @@ pub fn compile(
                 // If nothing fits, there is no dip: the two vowels join smoothly.
                 let dur = (b - r).max(0.0);
                 let mut candidates = vec![(b - reserve).max(r)];
-                for lead in [0.10, 0.20, 0.30] {
+                for lead in [0.08, 0.15, 0.22, 0.30] {
                     // Never more than the second half of the note: its first half is the vowel.
-                    if lead <= 0.5 * dur {
+                    // A lip consonant may take more: it has to shut all the way.
+                    if lead <= (if lips { 0.7 } else { 0.5 }) * dur {
                         candidates.push(b - lead);
                     }
                 }
@@ -357,18 +373,13 @@ pub fn compile(
                 for c in candidates {
                     let f = solve((r_next - c).max(MIN_T));
                     let better = match (f, fit) {
-                        (Some(v), Some(best)) => closed && v < best - 0.02,
+                        (Some(v), Some(best)) => v < best - 0.02,
                         (Some(_), None) => true,
                         _ => false,
                     };
                     if better {
                         s_pref = c;
                         fit = f;
-                    }
-                    if !closed && f.is_some_and(|v| low - v >= 0.03) {
-                        s_pref = c;
-                        fit = f;
-                        break;
                     }
                 }
                 if fit.is_none_or(|v| low - v < 0.03) {

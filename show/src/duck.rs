@@ -2,7 +2,7 @@
 //! second version — its own voice follows from this one list.
 
 use serde::{Deserialize, Serialize};
-use singer::{EndRule, NoteIn, Options, Performance, SectionHint, SectionKind, Vowel};
+use singer::{EndRule, NoteIn, Onset, Options, Performance, SectionHint, SectionKind, Vowel};
 
 use crate::error::{Problem, Problems};
 
@@ -50,6 +50,28 @@ pub struct NoteEvent {
     /// of with the written grid. Absent: the robot infers it from the written note.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sounding: Vec<[f64; 2]>,
+    /// What the lyric says precedes the vowel: a lip consonant shuts the beak, others narrow it,
+    /// a vowel-initial syllable hardly moves it. The app derives it from the pinyin initial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onset: Option<OnsetHint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnsetHint {
+    Closure,
+    Soft,
+    None,
+}
+
+impl From<OnsetHint> for Onset {
+    fn from(o: OnsetHint) -> Self {
+        match o {
+            OnsetHint::Closure => Onset::Closure,
+            OnsetHint::Soft => Onset::Soft,
+            OnsetHint::None => Onset::None,
+        }
+    }
 }
 
 /// Structure the app states outright. Optional: without it the robot infers sections from the
@@ -240,6 +262,7 @@ impl DuckScore {
                 vowel: e.voice.into(),
                 tie,
                 exact,
+                onset: e.onset.map(Onset::from),
             };
             if e.sounding.is_empty() {
                 notes.push(note(e.start_beat, e.duration_beats, e.continues_previous, false));

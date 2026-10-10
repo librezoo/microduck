@@ -27,6 +27,9 @@ pub struct NoteIn {
     /// `beats` is exactly how long the note is audible — the source measured it (Kivi Studio's
     /// render states its audible spans), so no end rule is applied.
     pub exact: bool,
+    /// What the source knows about the consonant before this vowel (from the lyric); `None` lets
+    /// the front end guess from what touches what.
+    pub onset: Option<Onset>,
 }
 
 /// How long a note is *audible* inside its written slot.
@@ -120,6 +123,8 @@ pub fn from_notes(notes: &[NoteIn], opts: &Options) -> Performance {
         let gap_before = prev.map_or(f32::INFINITY, |p| (n.start_beat - end_beat(p)) as f32);
         let onset = if n.tie {
             Onset::None
+        } else if let Some(stated) = n.onset {
+            stated
         } else {
             match prev {
                 Some(p) if gap_before < 0.5 => {
@@ -387,6 +392,7 @@ mod tests {
             vowel: Vowel::Ah,
             tie,
             exact: false,
+            onset: None,
         }
     }
 

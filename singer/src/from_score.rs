@@ -56,6 +56,7 @@ pub fn from_score(score: &Score, part: Part) -> Performance {
             vowel: map_vowel(n.vowel),
             tie: false,
             exact: false,
+            onset: None,
         })
         .collect();
     let mut opts = Options::new(

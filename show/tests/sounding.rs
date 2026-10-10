@@ -51,3 +51,24 @@ fn the_show_lasts_until_the_last_audible_moment() {
     let s = score(r#"{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":62,"volume":0.8,"sounding":[[0,900]]}"#);
     assert_eq!(s.end_ms(), 900);
 }
+
+fn deepest_dip(onset: &str) -> f32 {
+    let s = score(&format!(
+        r#"{{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":62,"volume":0.8,"sounding":[[0,500]]}},
+           {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"ah","midiNote":64,"volume":0.8,"sounding":[[500,1000]],"onset":"{onset}"}}"#
+    ));
+    let perf = s.to_performance("t").unwrap();
+    let show = singer::Show::compile(perf.clone(), singer::Style::auto(&perf), singer::Profile::default()).unwrap();
+    let (a, b) = ((0.3f32 * 50.0) as usize, (0.6f32 * 50.0) as usize);
+    let lo = show.mouth[a..=b].iter().cloned().fold(f32::MAX, f32::min);
+    let peak = show.mouth[..a].iter().cloned().fold(0.0f32, f32::max);
+    peak - lo
+}
+
+#[test]
+fn touching_syllables_still_articulate_and_a_lip_consonant_shuts_further() {
+    let none = deepest_dip("none");
+    let closure = deepest_dip("closure");
+    assert!(none >= 0.15, "even a vowel-initial join shows a dip: {none}");
+    assert!(closure > none + 0.05, "a lip consonant dips further: {closure} vs {none}");
+}
