@@ -76,6 +76,7 @@ thinking is not lost and does not get mistaken for a decision.
 
 | | |
 |---|---|
+| [`singing-performance.md`](ideas/singing-performance.md) | Singing as a performance: beak and head/neck motion from a described song, the `singer` crate, `robot.sing`, and the plan from hardware calibration to the final acceptance test. |
 | [`autonomous_behavior.md`](ideas/autonomous_behavior.md) | The behavior stack: what the runtime's brain has to give up, and the ideas the chorale and theremin work left behind. |
 
 ## Elsewhere

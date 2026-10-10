@@ -203,6 +203,46 @@ enum Namespace {
         piece: Option<u8>,
     },
 
+    /// Perform a song alone: the beak and the head follow a compiled performance, and the duck
+    /// sings the line unless `--mute`.
+    ///
+    /// Runs until the song ends or Ctrl-C, printing where it is, and stops cleanly on the way
+    /// out — the beak closes and the head returns to where it was told to look, never snapping.
+    /// Refused by a robot whose config has not opted in (`[chorale] accept`), because a
+    /// performance moves the beak and the head.
+    Sing {
+        /// Stop a running performance instead of starting one.
+        #[arg(long)]
+        off: bool,
+        /// Which shipped piece (ids as in `robotctl chorale --piece`). Default 2, duck-strut.
+        #[arg(long)]
+        piece: Option<u8>,
+        /// Which line of the piece: soprano (default), alto, tenor or bass.
+        #[arg(long)]
+        part: Option<String>,
+        /// ballad, pop or chant. Chosen from the song's tempo and density when absent.
+        #[arg(long)]
+        style: Option<String>,
+        /// Move the beak and head only; do not sing. For a song whose sound comes from elsewhere.
+        #[arg(long)]
+        mute: bool,
+        /// A `singer::Performance` as a JSON file, instead of a shipped piece.
+        #[arg(long, conflicts_with_all = ["piece", "part"])]
+        performance: Option<PathBuf>,
+        /// Calibration: how much later than commanded the beak moves, ms.
+        #[arg(long)]
+        mouth_latency_ms: Option<f64>,
+        /// Calibration: how much later than commanded the head moves, ms.
+        #[arg(long)]
+        head_latency_ms: Option<f64>,
+        /// Calibration: how much later than the beak command the sound is heard, ms.
+        #[arg(long)]
+        audio_latency_ms: Option<f64>,
+        /// Print one line per second as JSON instead of the live readout.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Play the duck: the head's depth sensor becomes a theremin, and a hand in front of the
     /// beak is the pitch — closer is higher, and the mouth opens with the note.
     ///
@@ -772,6 +812,132 @@ fn run_theremin(socket: &Path, off: bool) -> Result<(), Failure> {
     if outcome.accepted {
         println!("theremin put down");
     }
+    Ok(())
+}
+
+/// `robotctl sing` — perform a song alone, and watch where it is.
+#[allow(clippy::too_many_arguments)]
+fn run_sing(
+    socket: &Path,
+    off: bool,
+    piece: Option<u8>,
+    part: Option<String>,
+    style: Option<String>,
+    mute: bool,
+    performance: Option<PathBuf>,
+    latency: [Option<f64>; 3],
+    json: bool,
+) -> Result<(), Failure> {
+    let mut client = Client::connect_to("robotd", socket)?;
+    client.hello()?;
+
+    let performance = match performance {
+        Some(path) => Some(std::fs::read_to_string(&path).map_err(|e| {
+            Failure::new(exit::USAGE, format!("cannot read {}: {e}", path.display()))
+        })?),
+        None => None,
+    };
+    let ask = |client: &mut Client, active: bool| -> Result<proto::SingResult, Failure> {
+        let result = result_of(client.call(&proto::Call::RobotSing(proto::SingParams {
+            active,
+            piece: piece.filter(|_| active),
+            part: part.clone().filter(|_| active),
+            style: style.clone().filter(|_| active),
+            mute: mute && active,
+            performance: performance.clone().filter(|_| active),
+            mouth_latency_ms: latency[0].filter(|_| active),
+            head_latency_ms: latency[1].filter(|_| active),
+            audio_latency_ms: latency[2].filter(|_| active),
+        }))?)?;
+        decode(&result)
+    };
+
+    if off {
+        ask(&mut client, false)?;
+        println!("performance stopped");
+        return Ok(());
+    }
+    let outcome = ask(&mut client, true)?;
+    if !outcome.accepted {
+        let reason = outcome
+            .reason
+            .unwrap_or_else(|| "the robot refused to perform".to_owned());
+        return Err(Failure::new(exit::REFUSED, reason));
+    }
+    println!(
+        "performing {} in the {} style — {:.0} s, Ctrl-C to stop",
+        outcome.name.as_deref().unwrap_or("?"),
+        outcome.style.as_deref().unwrap_or("?"),
+        outcome.duration_s
+    );
+
+    // SAFETY: installing a handler whose whole body is one relaxed atomic store.
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            note_interrupt as *const () as libc::sighandler_t,
+        );
+    }
+    let mut stream = Client::connect_to("robotd", socket)?;
+    stream.hello()?;
+    stream.send(&proto::Request::call(
+        proto::Id::Number(1),
+        &proto::Call::RobotSubscribe(proto::SubscribeParams { hz: Some(10) }),
+    ))?;
+    let mut line = String::new();
+    let mut last_whole = -1i64;
+    let mut seen = false;
+    while !INTERRUPTED.load(std::sync::atomic::Ordering::Relaxed) {
+        line.clear();
+        match stream.reader.read_line(&mut line) {
+            Err(e) => {
+                let _ = ask(&mut client, false);
+                return Err(Failure::new(
+                    exit::UNREACHABLE,
+                    format!("the state stream stopped: {e}"),
+                ));
+            }
+            Ok(0) => break,
+            Ok(_) => {}
+        }
+        let Some(state) = serde_json::from_str::<proto::Request>(&line)
+            .ok()
+            .and_then(|r| r.as_state())
+        else {
+            continue;
+        };
+        let Some(sing) = state.sing else {
+            // Absent before the loop has picked the request up, and after the song has ended.
+            if seen {
+                break;
+            }
+            continue;
+        };
+        seen = true;
+        if json {
+            let whole = sing.t_s.floor() as i64;
+            if whole != last_whole {
+                last_whole = whole;
+                println!("{}", serde_json::to_string(&sing).unwrap_or_default());
+            }
+            continue;
+        }
+        print!(
+            "\r  {:<9} {:>6.1}/{:.0} s  {:<10} beak {} head pitch {:+.3} yaw {:+.3} roll {:+.3}   ",
+            sing.phase,
+            sing.t_s,
+            sing.duration_s,
+            sing.section.as_deref().unwrap_or("-"),
+            bar(sing.mouth),
+            sing.head[1],
+            sing.head[2],
+            sing.head[3],
+        );
+        let _ = std::io::stdout().flush();
+    }
+    println!();
+    let _ = ask(&mut client, false);
+    println!("performance over");
     Ok(())
 }
 
@@ -5475,6 +5641,31 @@ fn run(cli: Cli) -> Result<(), Failure> {
         }
         Namespace::Theremin { off } => {
             return run_theremin(&cli.robot_socket, off);
+        }
+        Namespace::Sing {
+            off,
+            piece,
+            part,
+            style,
+            mute,
+            performance,
+            mouth_latency_ms,
+            head_latency_ms,
+            audio_latency_ms,
+            json,
+        } => {
+            let latency = [mouth_latency_ms, head_latency_ms, audio_latency_ms];
+            return run_sing(
+                &cli.robot_socket,
+                off,
+                piece,
+                part,
+                style,
+                mute,
+                performance,
+                latency,
+                json,
+            );
         }
         Namespace::Chorale { off, piece } => {
             return run_chorale(&cli.robot_socket, off, piece);

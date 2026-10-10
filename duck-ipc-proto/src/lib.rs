@@ -725,6 +725,20 @@ pub mod method {
     /// false by default: a chorale moves the mouth and the head, and a robot that began animating
     /// because another robot walked into the room would be doing unrequested motion.
     pub const ROBOT_CHORALE: &str = "robot.chorale";
+    /// Perform a song alone: the beak and head follow a compiled performance (`singer`), and
+    /// the robot's own voice sings along unless the request says `mute` — for a song whose audio is
+    /// being played by something else.
+    ///
+    /// Discrete; the answer is [`super::SingResult`], and [`ROBOT_STATE`]'s `sing` block carries
+    /// the position while it runs. Sending `active: false` stops it: the beak closes and the
+    /// head returns to where it was told to look, rate-limited, never snapped. Refused by a
+    /// robot whose config has not opted in (`[chorale] accept` — one consent covers every
+    /// performance that moves the beak and the head), which is false by default.
+    ///
+    /// The song is a shipped piece (`piece`, `part`) or a `performance` — the JSON of a
+    /// `singer::Performance`, which is what an analysed song compiles from. Design:
+    /// `docs/ideas/singing-performance.md`.
+    pub const ROBOT_SING: &str = "robot.sing";
     /// Sit down gracefully, then power the machine off. The prototype's Select long-press.
     pub const ROBOT_SHUTDOWN: &str = "robot.shutdown";
     /// Which drive mode this `robotd` is in: `walk` or `roller`.
@@ -1050,6 +1064,8 @@ pub enum Call {
     /// Start or stop looking for other ducks to sing with. Discrete; the answer is
     /// [`ChoraleResult`].
     RobotChorale(ChoraleParams),
+    /// Perform a song alone. Discrete; the answer is [`SingResult`].
+    RobotSing(SingParams),
     /// `btd` subscribing to what it should advertise. Answered, then a stream of
     /// [`method::CHORALE_BEACON`] notifications.
     ChoraleSubscribe,
@@ -1227,6 +1243,7 @@ impl Call {
             Call::RobotSound(_) => method::ROBOT_SOUND,
             Call::RobotTheremin(_) => method::ROBOT_THEREMIN,
             Call::RobotChorale(_) => method::ROBOT_CHORALE,
+            Call::RobotSing(_) => method::ROBOT_SING,
             Call::ChoraleSubscribe => method::CHORALE_SUBSCRIBE,
             Call::ChoraleBeaconSet(_) => method::CHORALE_BEACON,
             Call::ChoraleHeard(_) => method::CHORALE_HEARD,
@@ -1412,6 +1429,7 @@ impl Call {
             | Call::RobotSound(_)
             | Call::RobotTheremin(_)
             | Call::RobotChorale(_)
+            | Call::RobotSing(_)
             | Call::RobotSetMode(_)
             | Call::RobotLoadPolicy(_)
             | Call::RobotReloadPolicies
@@ -1528,6 +1546,7 @@ impl Call {
             Call::RobotSound(p) => encode(p),
             Call::RobotTheremin(p) => encode(p),
             Call::RobotChorale(p) => encode(p),
+            Call::RobotSing(p) => encode(p),
             Call::ChoraleBeaconSet(p) => encode(p),
             Call::ChoraleHeard(p) => encode(p),
             Call::RobotSubscribe(p) => encode(p),
@@ -1619,6 +1638,7 @@ impl Call {
             method::ROBOT_SOUND => Call::RobotSound(decode(params)?),
             method::ROBOT_THEREMIN => Call::RobotTheremin(decode(params)?),
             method::ROBOT_CHORALE => Call::RobotChorale(decode(params)?),
+            method::ROBOT_SING => Call::RobotSing(decode(params)?),
             method::CHORALE_SUBSCRIBE => Call::ChoraleSubscribe,
             method::CHORALE_BEACON => Call::ChoraleBeaconSet(decode(params)?),
             method::CHORALE_HEARD => Call::ChoraleHeard(decode(params)?),
@@ -1777,6 +1797,17 @@ pub mod test_support {
                 active: true,
             }),
             Call::RobotMouth(MouthParams { open: 0.5 }),
+            Call::RobotSing(SingParams {
+                active: true,
+                piece: Some(2),
+                part: Some("soprano".into()),
+                style: Some("pop".into()),
+                mute: true,
+                performance: None,
+                mouth_latency_ms: None,
+                head_latency_ms: Some(220.0),
+                audio_latency_ms: None,
+            }),
             Call::RobotSound(SoundParams {
                 tag: SoundTag::Chirp,
                 hold: None,
@@ -3836,6 +3867,9 @@ pub struct RobotState {
     /// state of a duck — see [`ChoraleState`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chorale: Option<ChoraleState>,
+    /// What a solo performance is doing, while one runs. Absent otherwise — see [`SingState`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sing: Option<SingState>,
     /// `CLOCK_MONOTONIC` at this tick, nanoseconds — the same clock as [`TofFrame::t_ns`], so a
     /// mapper can put a state sample and a depth frame on one axis. Zero from a daemon predating
     /// it; `t` is still the loop's own elapsed time. (v24)
@@ -4968,6 +5002,90 @@ pub struct ChoraleParams {
     pub piece: Option<u8>,
 }
 
+/// See [`method::ROBOT_SING`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingParams {
+    /// True starts (or restarts) the performance, false stops it.
+    pub active: bool,
+    /// A shipped piece, by the id `robotctl chorale --piece` uses. Ignored when `performance` is
+    /// given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub piece: Option<u8>,
+    /// Which line of the piece: `soprano` (the default), `alto`, `tenor` or `bass`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<String>,
+    /// `ballad`, `pop` or `chant`. Chosen from the song's tempo and density when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// Do not sing: move the beak and head only, for a song whose sound comes from elsewhere.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mute: bool,
+    /// The JSON of a `singer::Performance`. Validated and compiled before the request is
+    /// accepted, so a bad one is refused with the reason and the robot never starts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub performance: Option<String>,
+    /// Calibration overrides, milliseconds: how much later than commanded the beak and the head
+    /// move, and how much later than the beak command the sound reaches the room. They exist so
+    /// the latencies can be *measured* — set one, film or record, and adjust — and are the
+    /// per-request form of what a `[sing]` section of `robotd.toml` will hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouth_latency_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_latency_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_latency_ms: Option<f64>,
+}
+
+/// Answer to [`Call::RobotSing`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SingResult {
+    pub accepted: bool,
+    /// Why not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The performance that was compiled, when accepted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Seconds of song, plus the settle.
+    pub duration_s: f64,
+    /// The style it was performed in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+}
+
+impl Default for SingResult {
+    fn default() -> Self {
+        Self {
+            accepted: true,
+            reason: None,
+            name: None,
+            duration_s: 0.0,
+            style: None,
+        }
+    }
+}
+
+/// What a solo performance is doing, in [`RobotState`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SingState {
+    pub name: String,
+    /// `lead-in`, `performing` or `settling`.
+    pub phase: String,
+    /// Song time, seconds. Negative during the lead-in.
+    pub t_s: f64,
+    pub duration_s: f64,
+    /// The section the song is in, e.g. `chorus#1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    /// What is being commanded: beak opening 0..1, and head offsets `[neck, pitch, yaw, roll]`
+    /// in radians.
+    pub mouth: f64,
+    pub head: [f64; 4],
+}
+
 /// Answer to [`Call::RobotChorale`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -5686,7 +5804,7 @@ mod tests {
     fn every_call_covers_every_variant() {
         assert_eq!(
             every_call().len(),
-            68,
+            69,
             "a Call variant was added or removed — update every_call() and this count"
         );
     }
@@ -6414,6 +6532,7 @@ mod tests {
             odom: OdomState::default(),
             theremin: None,
             chorale: None,
+            sing: None,
             t_ns: 0,
             imu: None,
             frames: None,

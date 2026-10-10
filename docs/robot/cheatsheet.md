@@ -735,6 +735,21 @@ Scores come from either `sounds/scores/*.duckscore` — a line-oriented text for
 parts, and export MIDI. Parts are matched by mean pitch, so a score written top-staff-first still
 puts the bass on the bass; a track *named* "Soprano" is believed over its pitches.
 
+### Sing a song alone
+
+```
+robotctl sing --piece 2 --part soprano     # a shipped piece; the duck sings it and moves
+robotctl sing --mute --style ballad        # beak and head only — the sound is someone else's
+robotctl sing --performance song.json      # a described song (a `singer::Performance`)
+robotctl sing --off                        # stop: the beak closes, the head returns, nothing snaps
+```
+
+The beak follows the vowels, the pitch and the line's loudness, with closures between syllables and a breath before
+each phrase; the head takes the phrase, the beat and the stressed words. Needs `[chorale] accept` like the chorale
+above, because it moves the beak and the head — and it will not start while a chorale or the theremin has the beak.
+`--mouth-latency-ms / --head-latency-ms / --audio-latency-ms` are for calibration. The design and the plan are in
+[`ideas/singing-performance.md`](../ideas/singing-performance.md).
+
 ### Play the duck (the ToF theremin)
 
 ```

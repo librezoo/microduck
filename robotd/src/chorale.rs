@@ -81,7 +81,7 @@ pub fn piece_catalogue() -> String {
 }
 
 /// The score for a piece id, or `None` for one this build does not know.
-fn piece(id: u8) -> Option<Score> {
+pub fn piece(id: u8) -> Option<Score> {
     match id {
         PIECE_WISTFUL => Some(Score::wistful()),
         PIECE_DUCK_STRUT => Some(Score::duck_strut()),

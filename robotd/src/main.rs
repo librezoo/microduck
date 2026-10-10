@@ -23,6 +23,7 @@ mod control;
 mod intents;
 mod params;
 mod pickup;
+mod sing;
 mod soc;
 mod sound;
 mod theremin;
@@ -2114,6 +2115,9 @@ async fn control_loop<T: RobotIo>(
     let mut chorale_mouth = 0.0f64;
     // And how the head sways while singing, applied to the next tick's command.
     let mut chorale_head = [0.0f64; 4];
+    // The solo performance, if one is running, and the head offsets it asked for.
+    let mut performer: Option<sing::Performer> = None;
+    let mut sing_head = [0.0f64; 4];
 
     // The note the theremin is holding, kept across ticks so a hand leaving the frame fades
     // the note at its own pitch instead of gliding to the bottom of the range on its way out.
@@ -2876,14 +2880,14 @@ async fn control_loop<T: RobotIo>(
         }
         let command = PolicyCommand {
             twist: twist_ema,
-            // The chorale's sway rides on top of whatever the head was asked to do, computed
-            // last tick (20 ms stale, invisible at sway speed) and slewed to zero when the
-            // singing stops so the head settles rather than snaps.
+            // The chorale's sway and a solo performance's motion ride on top of whatever the head
+            // was asked to do, computed last tick (20 ms stale, invisible at sway speed) and
+            // brought back to zero when the singing stops so the head settles rather than snaps.
             head: [
-                head_ema[0] + chorale_head[0],
-                head_ema[1] + chorale_head[1],
-                head_ema[2] + chorale_head[2],
-                head_ema[3] + chorale_head[3],
+                head_ema[0] + chorale_head[0] + sing_head[0],
+                head_ema[1] + chorale_head[1] + sing_head[1],
+                head_ema[2] + chorale_head[2] + sing_head[2],
+                head_ema[3] + chorale_head[3] + sing_head[3],
             ],
             body: BodyPose {
                 z: body_ema[0],
@@ -3428,10 +3432,73 @@ async fn control_loop<T: RobotIo>(
             }
         }
 
+        // A solo performance: the beak and head follow a compiled song, and the voice sings the
+        // line (or someone else does). After the theremin and the chorale, because while either is
+        // running it *is* the beak and a performance yields to it — and before the mouth intent,
+        // which a performance overrides for as long as it lasts.
+        let mut sing_state = None;
+        if let Some(command) = intents.take_sing() {
+            match command {
+                sing::Command::Stop => {
+                    if let Some(p) = performer.as_mut() {
+                        p.stop();
+                    }
+                }
+                sing::Command::Start(job) => {
+                    if chorale_state.is_some() || theremin_state.is_some() {
+                        tracing::warn!(
+                            "sing: the chorale or the theremin has the beak; not starting"
+                        );
+                    } else {
+                        if let Some(voice) = voice.as_mut() {
+                            voice.sing_stop();
+                        }
+                        tracing::warn!(song = %job.show.perf.name, "sing: starting");
+                        performer = Some(sing::Performer::new(job, tick_start));
+                    }
+                }
+            }
+        }
+        if let Some(p) = performer.as_mut() {
+            if chorale_state.is_some() || theremin_state.is_some() {
+                p.stop();
+            }
+            let step = p.tick(tick_start, period.as_secs_f32());
+            if let Some(voice) = voice.as_mut() {
+                match p.audio(tick_start) {
+                    Some((score, part, beats)) => {
+                        if voice.sing_start(score, part) {
+                            voice.sing_at(beats, true);
+                        }
+                    }
+                    None if p.audio_over(tick_start) => voice.sing_stop(),
+                    None => {}
+                }
+            }
+            match step {
+                Some((frame, state_block)) => {
+                    if snapshot.enabled && bringup == Bringup::Ready {
+                        targets[duck_control::model::MOUTH_INDEX] =
+                            duck_control::model::mouth_target(f64::from(frame.mouth));
+                    }
+                    sing_head = frame.head.map(f64::from);
+                    sing_state = Some(state_block);
+                }
+                None => {
+                    tracing::warn!("sing: finished");
+                    if let Some(voice) = voice.as_mut() {
+                        voice.sing_stop();
+                    }
+                    performer = None;
+                    sing_head = [0.0; 4];
+                }
+            }
+        }
+
         // The mouth is not part of any policy; the intent is the only thing that moves it.
         // Only while driving — a held or homing robot keeps whatever its hold pose says, so
         // a restart cannot snap a mouth.
-        if driving && theremin_state.is_none() && chorale_state.is_none() {
+        if driving && theremin_state.is_none() && chorale_state.is_none() && sing_state.is_none() {
             targets[duck_control::model::MOUTH_INDEX] =
                 duck_control::model::mouth_target(snapshot.mouth);
         }
@@ -3506,6 +3573,7 @@ async fn control_loop<T: RobotIo>(
                 },
                 theremin: theremin_state.clone(),
                 chorale: chorale_state.clone(),
+                sing: sing_state.clone(),
                 t_ns: sensors_read_ns,
                 imu: Some(proto::ImuState {
                     gyro: sensors.imu.gyro,
@@ -4887,6 +4955,24 @@ fn dispatch(
                     accepted: true,
                     reason: None,
                 }
+            };
+            proto::Response::ok(Some(id), &result)
+        }
+
+        // Perform a song alone. Everything that can be refused is refused here, with the reason,
+        // and the compile happens on this task rather than on the control thread: the loop is
+        // handed a finished show and only has to run it.
+        proto::Call::RobotSing(p) => {
+            let result = match sing::prepare(p, state.chorale_accepted, state.has_voice) {
+                Ok((command, result)) => {
+                    intents.request_sing(command);
+                    result
+                }
+                Err(reason) => proto::SingResult {
+                    accepted: false,
+                    reason: Some(reason),
+                    ..Default::default()
+                },
             };
             proto::Response::ok(Some(id), &result)
         }

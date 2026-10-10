@@ -1,0 +1,20 @@
+# The singing performance generator: from a description of a sung song (syllables, phrases,
+# sections, beats) to mouth and head/neck trajectories a duck can actually execute.
+#
+# Pure computation — no audio, no IPC, no clock. `robotd` owns the clock and the joints; this
+# crate owns what the beak and the head *should* be doing at song time t, and whether that is
+# something the mechanism can do. Design: `docs/ideas/singing-performance.md`.
+[package]
+name = "singer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Singing performance generation for the duck: mouth, head and neck trajectories"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# Only for `from_score`: the shipped pieces are `sounds::chorale::Score`s, and turning one into a
+# `Performance` is the first real front end this has.
+sounds = { path = "../sounds" }

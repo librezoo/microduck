@@ -679,6 +679,7 @@ mod tests {
                     odom: proto::OdomState::default(),
                     theremin: None,
                     chorale: None,
+                    sing: None,
                     t_ns: tick as u64,
                     imu: None,
                     frames: None,

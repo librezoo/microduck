@@ -281,6 +281,12 @@ fn permits(call: &proto::Call) -> bool {
         // refusal either way, and the same reason to lift it — an app that can play the duck.
         RobotSound(_) | RobotTheremin(_) | RobotChorale(_) => false,
 
+        // A solo performance is one request, not a stream — the argument that lets `RobotDo` ride
+        // the radio would let this too. It is held back until the phone app has a reason to ask
+        // for it and a performance's *state* has a way to reach it: opening a call whose progress
+        // the radio cannot report would be a button that looks like it did nothing.
+        RobotSing(_) => false,
+
         // The chorale's own namespace is between `btd` and `robotd` — it is how this daemon is told
         // what to advertise and how it reports what it heard. Not a client surface at all, so a
         // phone asking for it is asking for something that does not exist for it.
