@@ -64,7 +64,9 @@ const MODEL_API: u32 = 2;
 /// Socket mode. Same reasoning as `updaterd`'s: the group decides who may ask.
 const SOCKET_MODE: u32 = 0o660;
 
-const MAX_LINE: usize = 64 * 1024;
+/// The longest request line robotd reads. A song of several minutes (`robot.sing` carries its whole
+/// performance) is well over the old 64 KiB: a 4-minute pop song was 134 KB.
+const MAX_LINE: usize = 2 * 1024 * 1024;
 
 /// How often the loop logs a summary at `info`.
 ///
