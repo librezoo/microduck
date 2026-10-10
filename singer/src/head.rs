@@ -57,6 +57,8 @@ pub struct Layers {
     pub bow: bool,
     pub idle: bool,
     pub mood: bool,
+    pub follow: bool,
+    pub swing: bool,
 }
 
 impl Layers {
@@ -70,6 +72,8 @@ impl Layers {
         bow: true,
         idle: true,
         mood: true,
+        follow: true,
+        swing: true,
     };
     pub const NONE: Layers = Layers {
         pose: false,
@@ -81,6 +85,8 @@ impl Layers {
         bow: false,
         idle: false,
         mood: false,
+        follow: false,
+        swing: false,
     };
     pub fn beat_only() -> Self {
         Self {
@@ -288,6 +294,12 @@ pub fn compile(
 
     let last_end = perf.phrases.last().map_or(perf.duration, |p| p.end);
     let n = ((perf.duration + 1.6) * profile.rate).ceil() as usize + 1;
+    let follow_track = if layers.follow && st.follow > 0.0 {
+        follow_curve(perf, n, profile.rate)
+    } else {
+        Vec::new()
+    };
+    let bar_s = if perf.bpm > 0.0 { 4.0 * 60.0 / perf.bpm } else { 2.0 };
     let dt = 1.0 / profile.rate;
     let mut out = Vec::with_capacity(n);
     let mut prev = [0.0f32; 4];
@@ -389,13 +401,30 @@ pub fn compile(
             0.0
         };
 
-        let pitch = arc + prep + dip + acc + beat + bow + mood + idle[0];
+        // follow: the head rides the melody (high note, lifted head), a little behind it.
+        let follow = follow_track.get(k).map_or(0.0, |v| st.follow * v);
+        // swing: a groove across the bars, ducked while a nod or an accent is happening.
+        let (swing_yaw, swing_roll) = if layers.swing && st.swing > 0.0 {
+            let singing = perf.phrases.iter().any(|p| t >= p.start - 0.3 && t <= p.end + 0.3);
+            let w = if singing { 1.0 } else { st.listen * 0.7 };
+            let g = (1.0 - 0.6 * acc_norm) * (1.0 - 0.5 * prep_norm.min(1.0));
+            let (_, variant) = section_gain(perf, t);
+            let (v, roll_v) = swing_at(t, bar_s, seed, ph1);
+            (
+                st.swing * w * g * (1.0 + 0.1 * variant.min(3) as f32) * v,
+                0.35 * st.swing * w * g * roll_v,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+
+        let pitch = arc + prep + dip + acc + beat + bow + mood + idle[0] + follow;
         // The neck takes a third of every pitch movement: the head does not do it alone.
         let raw = [
             0.35 * pitch,
             pitch,
-            pose_yaw + sway_yaw + idle[1],
-            pose_roll + sway_roll + idle[2],
+            pose_yaw + sway_yaw + idle[1] + swing_yaw,
+            pose_roll + sway_roll + idle[2] + swing_roll,
         ];
         let mut cur = [0.0f32; 4];
         for j in 0..4 {
@@ -428,4 +457,67 @@ pub fn compile(
 /// Phrase accessors the metrics use.
 pub fn phrase_windows(perf: &Performance) -> Vec<Phrase> {
     perf.phrases.clone()
+}
+
+/// How far above (+) or below (−) the phrase's own centre the voice is at each output sample, in
+/// octaves, smoothed with a ~0.22 s lag so the head trails the note instead of stepping on it.
+/// Between phrases it relaxes to zero.
+fn follow_curve(perf: &Performance, n: usize, rate: f32) -> Vec<f32> {
+    let mut centre = vec![0.0f32; perf.phrases.len()];
+    for (c, p) in centre.iter_mut().zip(&perf.phrases) {
+        let (sum, len) = perf
+            .syllables
+            .iter()
+            .filter(|s| s.start >= p.start - 1e-3 && s.end <= p.end + 1e-3)
+            .fold((0.0f32, 0.0f32), |(a, l), s| {
+                (a + s.pitch * s.duration(), l + s.duration())
+            });
+        *c = if len > 0.0 { sum / len } else { 60.0 };
+    }
+    let dt = 1.0 / rate;
+    let a = alpha(dt, 0.22);
+    let mut out = Vec::with_capacity(n);
+    let mut y = 0.0f32;
+    let mut si = 0usize;
+    for k in 0..n {
+        let t = k as f32 * dt;
+        while si < perf.syllables.len() && perf.syllables[si].end < t {
+            si += 1;
+        }
+        let target = match perf.syllables.get(si) {
+            Some(s) if t >= s.start - 0.02 => {
+                let ph = perf
+                    .phrases
+                    .iter()
+                    .position(|p| s.start >= p.start - 1e-3 && s.end <= p.end + 1e-3);
+                ph.map_or(0.0, |i| (s.pitch - centre[i]) / 12.0)
+            }
+            _ => 0.0,
+        };
+        y += a * (target - y);
+        out.push(y.clamp(-1.0, 1.0));
+    }
+    out
+}
+
+/// The side-to-side groove at time `t`: yaw in −1..1 and a roll that leans with it (a quarter
+/// cycle behind, so the head traces a slanted figure and not a line). Each bar has its own size
+/// (0.4..1) and direction, chosen from the seed, and the bars are joined smoothly (the sine is
+/// zero at every bar line), so the sway is locked to the music without being a pendulum.
+fn swing_at(t: f32, bar_s: f32, seed: u64, phase: f32) -> (f32, f32) {
+    let x = t / bar_s.max(0.5);
+    let bar = x.floor();
+    let frac = x - bar;
+    let amp = |i: f32| {
+        let size = 0.4 + 0.6 * hash01(seed, (i + 1000.0) as u64, 41);
+        let dir = if hash01(seed, (i + 1000.0) as u64, 43) > 0.5 { 1.0 } else { -1.0 };
+        size * dir
+    };
+    // One half-wave per bar: out and back, from this bar's amplitude into the next one's.
+    let a0 = amp(bar);
+    let a1 = amp(bar + 1.0);
+    let w = raised_cos(frac);
+    let level = a0 * (1.0 - w) + a1 * w;
+    let _ = phase;
+    (level * (TAU * frac).sin(), 0.5 * level * (TAU * frac).cos())
 }

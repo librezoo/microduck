@@ -72,6 +72,7 @@ async fn rig() -> Rig {
         head_latency_ms: 250.0,
         audio_latency_ms: 0.0,
         head_scale: 2.0,
+        style: None,
         max_show_bytes: 32 << 20,
         max_events: 2000,
         volume_file: dir.join("volume"),

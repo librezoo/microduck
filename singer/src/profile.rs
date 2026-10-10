@@ -52,6 +52,19 @@ pub struct HeadProfile {
     pub pitch_up_sign: f32,
 }
 
+impl HeadProfile {
+    /// For the `lively` style: budgets close to what the sitting duck's head may do
+    /// (`HEAD_ABS_MAX` in robotd is the last word) and speeds a head can keep up with.
+    pub fn lively() -> Self {
+        Self {
+            budget: [0.16, 0.28, 0.70, 0.22],
+            max_vel: [1.0, 1.8, 2.2, 1.8],
+            max_acc: [10.0, 18.0, 20.0, 16.0],
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for HeadProfile {
     fn default() -> Self {
         Self {

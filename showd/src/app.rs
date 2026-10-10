@@ -39,6 +39,8 @@ pub struct Config {
     pub audio_latency_ms: f64,
     /// Scale of every head amplitude (1.0 = the style's own).
     pub head_scale: f64,
+    /// The performance style by name; `None` lets the robot choose from the song.
+    pub style: Option<String>,
     pub max_show_bytes: u64,
     pub max_events: usize,
     pub volume_file: std::path::PathBuf,
@@ -527,7 +529,7 @@ impl App {
             active: true,
             piece: None,
             part: None,
-            style: None,
+            style: self.cfg.style.clone(),
             mute,
             performance: Some(perf_json),
             mouth_latency_ms: Some(self.cfg.mouth_latency_ms),

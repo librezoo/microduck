@@ -72,3 +72,24 @@ fn touching_syllables_still_articulate_and_a_lip_consonant_shuts_further() {
     assert!(none >= 0.15, "even a vowel-initial join shows a dip: {none}");
     assert!(closure > none + 0.05, "a lip consonant dips further: {closure} vs {none}");
 }
+
+/// Beak opening in the middle of each of two tied notes (a run), in the lively style.
+fn run_openings(from: u8, to: u8) -> (f32, f32) {
+    let json = format!(
+        r#"{{"schema":"kivi.duck/1","tempoBpm":120,"events":[
+        {{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":{from},"volume":0.8,"sounding":[[0,500]]}},
+        {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"ah","midiNote":{to},"volume":0.8,"continuesPrevious":true,"sounding":[[500,1000]]}}]}}"#
+    );
+    let perf = DuckScore::parse(json.as_bytes()).unwrap().to_performance("t").unwrap();
+    let style = singer::Style::by_name("lively").unwrap();
+    let show = singer::Show::compile(perf, style, singer::Profile::default()).unwrap();
+    (show.mouth[(0.4f32 * 50.0) as usize], show.mouth[(0.95f32 * 50.0) as usize])
+}
+
+#[test]
+fn a_run_up_opens_the_beak_wider_and_a_run_down_narrows_it() {
+    let (a, b) = run_openings(60, 67);
+    assert!(b > a + 0.1, "up: {a} -> {b}");
+    let (a, b) = run_openings(67, 60);
+    assert!(b < a - 0.1, "down: {a} -> {b}");
+}

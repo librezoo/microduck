@@ -153,7 +153,7 @@ pub fn prepare(
             None => Ok(Style::auto(perf)),
             Some(name) => Style::by_name(name)
                 .map(|s| s.with_seed(singer::dsp::seed_of(&perf.name)))
-                .ok_or_else(|| format!("unknown style {name:?} — have ballad, pop, chant")),
+                .ok_or_else(|| format!("unknown style {name:?} — have ballad, pop, chant, lively")),
         }
     };
 
@@ -222,6 +222,9 @@ pub fn prepare(
     }
     let style_name = style.name.clone();
     let mut profile = Profile::default();
+    if style.name == "lively" {
+        profile.head = singer::profile::HeadProfile::lively();
+    }
     for (field, ms) in [
         (&mut profile.mouth_latency, p.mouth_latency_ms),
         (&mut profile.head_latency, p.head_latency_ms),

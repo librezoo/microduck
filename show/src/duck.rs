@@ -198,7 +198,7 @@ impl DuckScore {
             if e.sounding.len() > 64 {
                 p.push(Problem::new("TooLarge", "a note has more than 64 sounding spans").at(&e.event_id));
             }
-            if e.start_beat < prev_end - 1e-6 {
+            if e.sounding.is_empty() && e.start_beat < prev_end - 1e-6 {
                 p.push(
                     Problem::new("Overlap", "a note starts before the previous one ends")
                         .at(&e.event_id),

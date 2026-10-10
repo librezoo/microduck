@@ -185,6 +185,16 @@ pub fn compile(
             *o = floor + (*o - floor) * (0.7 + 0.3 * s.confidence);
         }
     }
+    if st.interval_gain > 0.0 {
+        // A step up opens the beak, a step down narrows it, within a phrase (not across a breath).
+        let base = opens.clone();
+        for i in 1..opens.len() {
+            if sy[i].start - sy[i - 1].end < 0.4 && sy[i].vowel != Vowel::Mm {
+                let step = ((sy[i].pitch - sy[i - 1].pitch) / 8.0).clamp(-1.0, 1.0);
+                opens[i] = (base[i] + st.interval_gain * step).clamp(st.floor_open, 1.0);
+            }
+        }
+    }
     let arrival = |s: &Syllable| s.start + ATTACK - st.anticipation;
 
     for (i, s) in sy.iter().enumerate() {

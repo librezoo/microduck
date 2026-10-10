@@ -44,6 +44,12 @@ pub struct MouthStyle {
     /// How much earlier than the sound the jaw starts to move, seconds. A style choice about
     /// *looking* prepared; mechanical latency is `Profile::mouth_latency`, handled elsewhere.
     pub anticipation: f32,
+    /// How much a step in pitch changes the opening: a rise of eight semitones (or more) opens the
+    /// beak by this much more, a fall closes it by as much, within a phrase. This is what makes a
+    /// run or a slide *look* like one; the pitch-normalised term alone moves the beak by only a few
+    /// percent for a step of a tone or two. 0 = off.
+    #[serde(default)]
+    pub interval_gain: f32,
     /// How much a held note relaxes after the attack, fraction of its opening.
     pub settle: f32,
     /// Amplitude of the slow breathing drift on held notes, fraction of the opening. Keeps a
@@ -85,6 +91,15 @@ pub struct HeadStyle {
     /// How far a section's overall intensity lifts or lowers the head, radians. The motion
     /// starts well *before* the section does (see `head::MOOD_LEAD`).
     pub mood_pitch: f32,
+    /// The head follows the melody: radians of head pitch per octave the voice is above or below
+    /// the phrase's own centre, lagging a little (a lifted head on a high note, a lowered one on a
+    /// low note). 0 = off.
+    #[serde(default)]
+    pub follow: f32,
+    /// A slow side-to-side groove locked to the bars, radians of yaw (and a little roll). Each
+    /// bar's size and direction vary, so it is a dance and not a pendulum. 0 = off.
+    #[serde(default)]
+    pub swing: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,6 +124,7 @@ impl Style {
                 legato_dip: 0.28,
                 closure_gap: 0.10,
                 anticipation: 0.05,
+                interval_gain: 0.0,
                 settle: 0.14,
                 drift: 0.035,
                 breath_min: 0.35,
@@ -131,6 +147,8 @@ impl Style {
                 listen: 0.7,
                 idle: 0.008,
                 mood_pitch: 0.025,
+                follow: 0.0,
+                swing: 0.0,
             },
             seed: 0,
         }
@@ -149,6 +167,7 @@ impl Style {
                 legato_dip: 0.45,
                 closure_gap: 0.07,
                 anticipation: 0.04,
+                interval_gain: 0.0,
                 settle: 0.10,
                 drift: 0.025,
                 breath_min: 0.30,
@@ -171,10 +190,58 @@ impl Style {
                 listen: 0.9,
                 idle: 0.007,
                 mood_pitch: 0.020,
+                follow: 0.0,
+                swing: 0.0,
             },
             seed: 0,
         }
         .visible()
+    }
+
+    /// Big and playful: the beak opens wide and works on every syllable, the head follows the
+    /// tune, nods hard on stress and sways side to side with the bars. Amplitudes are near what
+    /// the head is allowed to do (see `HeadProfile::lively` for the matching budgets); it is for a
+    /// duck that is sitting, and it trades the believable restraint of the other three for fun.
+    pub fn lively() -> Self {
+        Self {
+            name: "lively".into(),
+            mouth: MouthStyle {
+                gain: 1.0,
+                pitch_gain: 0.55,
+                level_gain: 0.45,
+                climax_open: 0.55,
+                floor_open: 0.10,
+                legato_dip: 0.70,
+                closure_gap: 0.06,
+                anticipation: 0.04,
+                interval_gain: 0.28,
+                settle: 0.28,
+                drift: 0.05,
+                breath_min: 0.30,
+                breath_open: 0.16,
+            },
+            head: HeadStyle {
+                arc_pitch: 0.15,
+                arc_yaw: 0.30,
+                arc_roll: 0.10,
+                prep: 0.09,
+                onset_nod: 0.08,
+                beat_nod: 0.07,
+                accent: 0.14,
+                sway_roll: 0.14,
+                sway_yaw: 0.20,
+                sway_period: 2.2,
+                sway_after: 0.5,
+                final_bow: 0.14,
+                nod_rate_max: 2.2,
+                listen: 0.8,
+                idle: 0.02,
+                mood_pitch: 0.08,
+                follow: 0.30,
+                swing: 0.30,
+            },
+            seed: 0,
+        }
     }
 
     /// Fast, clipped delivery: the beak snaps on every syllable, the head hits accents and the
@@ -191,6 +258,7 @@ impl Style {
                 legato_dip: 0.75,
                 closure_gap: 0.05,
                 anticipation: 0.03,
+                interval_gain: 0.0,
                 settle: 0.05,
                 drift: 0.015,
                 breath_min: 0.25,
@@ -213,6 +281,8 @@ impl Style {
                 listen: 1.0,
                 idle: 0.005,
                 mood_pitch: 0.015,
+                follow: 0.0,
+                swing: 0.0,
             },
             seed: 0,
         }
@@ -231,6 +301,7 @@ impl Style {
             "ballad" => Some(Self::ballad()),
             "pop" => Some(Self::pop()),
             "chant" => Some(Self::chant()),
+            "lively" => Some(Self::lively()),
             _ => None,
         }
     }
@@ -273,6 +344,8 @@ impl Style {
             &mut h.final_bow,
             &mut h.idle,
             &mut h.mood_pitch,
+            &mut h.follow,
+            &mut h.swing,
         ] {
             *v *= head;
         }

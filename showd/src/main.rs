@@ -45,10 +45,14 @@ struct Args {
     head_latency_ms: f64,
     #[arg(long, default_value_t = 0.0)]
     audio_latency_ms: f64,
-    /// How big the head moves, 1.0 being each style's own amplitude. 2.0 was tried on the first
-    /// robot, sitting: peaks of ~9° yaw, currents unchanged, nothing hot.
-    #[arg(long, default_value_t = 2.0)]
+    /// How big the head moves, 1.0 being each style's own amplitude. (The old restrained styles
+    /// were tried at 2.0 on the first robot, sitting: peaks of ~9° yaw, currents unchanged.)
+    #[arg(long, default_value_t = 1.0)]
     head_scale: f64,
+    /// The performance style: `lively` (big and playful, for a sitting duck), or `ballad`, `pop`,
+    /// `chant`; `auto` picks one of those three from the song.
+    #[arg(long, default_value = "lively")]
+    style: String,
     #[arg(long, default_value_t = 160 << 20)]
     max_show_bytes: u64,
 }
@@ -97,6 +101,7 @@ async fn main() -> Result<()> {
         head_latency_ms: a.head_latency_ms,
         audio_latency_ms: a.audio_latency_ms,
         head_scale: a.head_scale,
+        style: (a.style != "auto").then(|| a.style.clone()),
         max_show_bytes: a.max_show_bytes,
         max_events: 2000,
         volume_file: a.data.join("volume"),
