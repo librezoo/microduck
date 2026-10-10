@@ -222,10 +222,10 @@ impl Style {
             name: "lively".into(),
             mouth: MouthStyle {
                 gain: 1.55,
-                pitch_gain: 0.55,
-                level_gain: 0.45,
+                pitch_gain: 0.30,
+                level_gain: 0.30,
                 climax_open: 0.55,
-                floor_open: 0.10,
+                floor_open: 0.22,
                 legato_dip: 0.70,
                 closure_gap: 0.06,
                 anticipation: 0.04,

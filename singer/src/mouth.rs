@@ -189,6 +189,13 @@ pub fn compile(
             *o = floor + (*o - floor) * (0.7 + 0.3 * s.confidence);
         }
     }
+    // A tied fragment too short for the beak to follow keeps its predecessor's opening: re-aiming
+    // at 70 ms only makes the beak twitch.
+    for i in 1..opens.len() {
+        if sy[i].tie && sy[i].end - sy[i].start < 0.12 && sy[i].start - sy[i - 1].end < 0.05 {
+            opens[i] = opens[i - 1];
+        }
+    }
     if st.interval_gain > 0.0 {
         // A step up opens the beak, a step down narrows it, within a phrase (not across a breath).
         let base = opens.clone();
