@@ -1807,6 +1807,7 @@ pub mod test_support {
                 mouth_latency_ms: None,
                 head_latency_ms: Some(220.0),
                 audio_latency_ms: None,
+                head_scale: Some(1.5),
             }),
             Call::RobotSound(SoundParams {
                 tag: SoundTag::Chirp,
@@ -5035,6 +5036,10 @@ pub struct SingParams {
     pub head_latency_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_latency_ms: Option<f64>,
+    /// Calibration: scale every head amplitude (1.0 = the style's own). The per-joint budgets
+    /// still bound the result, so scaling up cannot ask for more than the profile allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_scale: Option<f64>,
 }
 
 /// Answer to [`Call::RobotSing`].

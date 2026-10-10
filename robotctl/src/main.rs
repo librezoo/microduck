@@ -238,6 +238,9 @@ enum Namespace {
         /// Calibration: how much later than the beak command the sound is heard, ms.
         #[arg(long)]
         audio_latency_ms: Option<f64>,
+        /// Calibration: scale every head amplitude (1.0 = the style's own; bounded by the budgets).
+        #[arg(long)]
+        head_scale: Option<f64>,
         /// Print one line per second as JSON instead of the live readout.
         #[arg(long)]
         json: bool,
@@ -825,7 +828,7 @@ fn run_sing(
     style: Option<String>,
     mute: bool,
     performance: Option<PathBuf>,
-    latency: [Option<f64>; 3],
+    latency: [Option<f64>; 4],
     json: bool,
 ) -> Result<(), Failure> {
     let mut client = Client::connect_to("robotd", socket)?;
@@ -848,6 +851,7 @@ fn run_sing(
             mouth_latency_ms: latency[0].filter(|_| active),
             head_latency_ms: latency[1].filter(|_| active),
             audio_latency_ms: latency[2].filter(|_| active),
+            head_scale: latency[3].filter(|_| active),
         }))?)?;
         decode(&result)
     };
@@ -5652,9 +5656,15 @@ fn run(cli: Cli) -> Result<(), Failure> {
             mouth_latency_ms,
             head_latency_ms,
             audio_latency_ms,
+            head_scale,
             json,
         } => {
-            let latency = [mouth_latency_ms, head_latency_ms, audio_latency_ms];
+            let latency = [
+                mouth_latency_ms,
+                head_latency_ms,
+                audio_latency_ms,
+                head_scale,
+            ];
             return run_sing(
                 &cli.robot_socket,
                 off,

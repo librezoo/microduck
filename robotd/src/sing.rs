@@ -106,7 +106,13 @@ pub fn prepare(
                 .to_owned(),
         );
     }
-    let style = style_by_name(&perf)?;
+    let mut style = style_by_name(&perf)?;
+    if let Some(scale) = p.head_scale {
+        if !(0.0..=5.0).contains(&scale) {
+            return Err(format!("a head scale of {scale} is outside 0..5"));
+        }
+        style = style.scaled(1.0, scale as f32);
+    }
     let style_name = style.name.clone();
     let mut profile = Profile::default();
     for (field, ms) in [
@@ -242,6 +248,7 @@ mod tests {
             mouth_latency_ms: None,
             head_latency_ms: None,
             audio_latency_ms: None,
+            head_scale: None,
         }
     }
 
