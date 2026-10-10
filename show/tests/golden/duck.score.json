@@ -1,0 +1,21 @@
+{
+  "schema": "kivi.duck/1",
+  "tempoBpm": 96,
+  "beatsPerBar": 4,
+  "events": [
+    {"eventId": "n01", "startBeat": 0,  "durationBeats": 1,   "voice": "ah", "midiNote": 62, "volume": 0.7},
+    {"eventId": "n02", "startBeat": 1,  "durationBeats": 1,   "voice": "oh", "midiNote": 64, "volume": 0.75},
+    {"eventId": "n03", "startBeat": 2,  "durationBeats": 1.5, "voice": "ah", "midiNote": 67, "volume": 0.85},
+    {"eventId": "n04", "startBeat": 3.5, "durationBeats": 0.5, "voice": "ah", "midiNote": 65, "volume": 0.8, "continuesPrevious": true},
+    {"eventId": "n05", "startBeat": 4,  "durationBeats": 2,   "voice": "ee", "midiNote": 69, "volume": 0.9},
+    {"eventId": "n06", "startBeat": 8,  "durationBeats": 1,   "voice": "oo", "midiNote": 60, "volume": 0.6},
+    {"eventId": "n07", "startBeat": 9,  "durationBeats": 1,   "voice": "mm", "midiNote": 60, "volume": 0.5},
+    {"eventId": "n08", "startBeat": 10, "durationBeats": 2,   "voice": "ah", "midiNote": 72, "volume": 1.0},
+    {"eventId": "n09", "startBeat": 12, "durationBeats": 1,   "voice": "ah", "midiNote": 72, "volume": 0.9, "continuesPrevious": true},
+    {"eventId": "n10", "startBeat": 13, "durationBeats": 3,   "voice": "eh", "midiNote": 67, "volume": 0.8}
+  ],
+  "sections": [
+    {"kind": "verse",  "startBeat": 0, "endBeat": 8,  "intensity": 0.5},
+    {"kind": "chorus", "startBeat": 8, "endBeat": 16, "intensity": 0.95}
+  ]
+}

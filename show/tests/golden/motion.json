@@ -1,0 +1,24 @@
+{
+  "schema": "kivi.motion/1",
+  "actions": [
+    {"eventId": "a1", "actionId": "sit-down", "type": "skill", "skill": "sit_toggle", "startMs": 0, "durationMs": 3000},
+    {"eventId": "a2", "actionId": "look-around", "type": "head", "startMs": 3000, "durationMs": 4000,
+     "keyframes": [
+       {"tMs": 0,    "neckPitch": 0, "headPitch": 0,    "headYaw": 0,    "headRoll": 0},
+       {"tMs": 1500, "neckPitch": 0, "headPitch": -0.1, "headYaw": 0.35, "headRoll": 0.05},
+       {"tMs": 3000, "neckPitch": 0, "headPitch": -0.05, "headYaw": -0.35, "headRoll": -0.05},
+       {"tMs": 4000, "neckPitch": 0, "headPitch": 0,    "headYaw": 0,    "headRoll": 0}]},
+    {"eventId": "a3", "actionId": "stand-up", "type": "skill", "skill": "sit_toggle", "startMs": 7000, "durationMs": 3000},
+    {"eventId": "a4", "actionId": "sway", "type": "body", "startMs": 10000, "durationMs": 2000,
+     "keyframes": [
+       {"tMs": 0,    "z": 0,      "roll": 0,     "pitch": 0},
+       {"tMs": 1000, "z": -0.015, "roll": 0.12,  "pitch": 0.05},
+       {"tMs": 2000, "z": 0,      "roll": 0,     "pitch": 0}]},
+    {"eventId": "a5", "actionId": "stroll", "type": "walk", "startMs": 12000, "durationMs": 3000,
+     "keyframes": [
+       {"tMs": 0,    "vx": 0,    "vy": 0, "vyaw": 0},
+       {"tMs": 500,  "vx": 0.12, "vy": 0, "vyaw": 0},
+       {"tMs": 2500, "vx": 0.12, "vy": 0, "vyaw": 0},
+       {"tMs": 3000, "vx": 0,    "vy": 0, "vyaw": 0}]}
+  ]
+}

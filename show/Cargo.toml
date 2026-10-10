@@ -1,0 +1,18 @@
+# The show package: what a song is when an app hands it to a duck — a manifest and a few tracks.
+#
+# Formats, validation and the conversion of the note track into something `singer` can perform.
+# No IO and no async: `showd` (the service) and the tests use it, and so can anything that wants to
+# check a package offline. Design: `docs/ideas/kivi-show-integration.md`.
+[package]
+name = "show"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Show package formats and validation for the Kivi Studio integration"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.0"
+singer = { path = "../singer" }
