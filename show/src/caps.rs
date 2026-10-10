@@ -122,8 +122,8 @@ impl Capabilities {
     pub fn default_limits() -> (HeadLimits, BodyLimits, WalkLimits) {
         (
             HeadLimits {
-                max_abs: [0.20, 0.30, 0.50, 0.25],
-                max_vel: [0.8, 1.2, 1.5, 1.2],
+                max_abs: [0.20, 0.30, 0.85, 0.25],
+                max_vel: [0.8, 1.2, 2.0, 1.2],
             },
             BodyLimits {
                 z: (-0.025, 0.010),
@@ -132,7 +132,7 @@ impl Capabilities {
             },
             WalkLimits {
                 max_vx: 0.20,
-                max_vy: 0.10,
+                max_vy: 0.15,
                 max_vyaw: 0.8,
             },
         )

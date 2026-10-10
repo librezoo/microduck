@@ -43,10 +43,24 @@ pub struct WalkKey {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ActionKind {
-    Skill { skill: String },
-    Head { keyframes: Vec<HeadKey> },
-    Body { keyframes: Vec<BodyKey> },
-    Walk { keyframes: Vec<WalkKey> },
+    Skill {
+        skill: String,
+    },
+    Head {
+        keyframes: Vec<HeadKey>,
+    },
+    Body {
+        keyframes: Vec<BodyKey>,
+    },
+    Walk {
+        keyframes: Vec<WalkKey>,
+    },
+    /// Nothing is commanded: the clip asserts the pose the robot is to be in (`standing` or
+    /// `sitting`) for its duration. A "stand naturally" clip between two songs' worth of motion
+    /// is this — and on a robot that is sitting it is refused, not turned into a stand-up.
+    Hold {
+        pose: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -71,7 +85,7 @@ pub struct MotionTrack {
 
 fn keys_t(kind: &ActionKind) -> Vec<u64> {
     match kind {
-        ActionKind::Skill { .. } => vec![],
+        ActionKind::Skill { .. } | ActionKind::Hold { .. } => vec![],
         ActionKind::Head { keyframes } => keyframes.iter().map(|k| k.t_ms).collect(),
         ActionKind::Body { keyframes } => keyframes.iter().map(|k| k.t_ms).collect(),
         ActionKind::Walk { keyframes } => keyframes.iter().map(|k| k.t_ms).collect(),
@@ -186,6 +200,27 @@ impl MotionTrack {
                         }
                     }
                 },
+                ActionKind::Hold { pose: want } => {
+                    let want = Pose::from_name(want);
+                    if want == Pose::Unknown {
+                        p.push(
+                            Problem::new("Corrupt", "a hold names standing or sitting")
+                                .at(&a.event_id),
+                        );
+                    } else if want != pose {
+                        p.push(
+                            Problem::new(
+                                "PoseMismatch",
+                                format!(
+                                    "the clip holds the robot {}; it will be {}",
+                                    want.name(),
+                                    pose.name()
+                                ),
+                            )
+                            .at(&a.event_id),
+                        );
+                    }
+                }
                 ActionKind::Head { keyframes } => {
                     let lim = caps.head.max_abs;
                     for k in keyframes {

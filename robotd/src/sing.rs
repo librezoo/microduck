@@ -42,7 +42,7 @@ pub const PRE_ROLL_S: f32 = 1.5;
 /// The head's absolute ceiling, performance and head clips together, radians. The show library's
 /// own validation is stricter; this is the last line, and it clamps rather than refuses because
 /// two layers legitimately add.
-pub const HEAD_ABS_MAX: [f32; 4] = [0.20, 0.30, 0.50, 0.25];
+pub const HEAD_ABS_MAX: [f32; 4] = [0.20, 0.30, 0.85, 0.25];
 
 /// The largest WAV the robot will decode into memory.
 const MAX_AUDIO_BYTES: u64 = 160 << 20;

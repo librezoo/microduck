@@ -159,7 +159,7 @@ impl Timeline {
                         let _ = need;
                     }
                 },
-                ActionKind::Body { .. } | ActionKind::Walk { .. } => {}
+                ActionKind::Body { .. } | ActionKind::Walk { .. } | ActionKind::Hold { .. } => {}
             }
             steps.push(Step {
                 start_s: a.start_ms as f64 / 1000.0,
@@ -1022,6 +1022,22 @@ impl App {
                             return;
                         }
                         running = Some((next, Running::Hold));
+                    }
+                    ActionKind::Hold { .. } => {
+                        // Commands nothing; the pose it asserts is the pose it must find.
+                        let pose = pose_of(&st);
+                        if pose != step.before {
+                            self.abort(
+                                &format!(
+                                    "the show expects the robot {}; it is {}",
+                                    step.before.name(),
+                                    pose.name()
+                                ),
+                                "PoseMismatch",
+                            )
+                            .await;
+                            return;
+                        }
                     }
                     ActionKind::Head { .. } => {}
                 }
