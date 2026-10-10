@@ -73,12 +73,13 @@ fn touching_syllables_still_articulate_and_a_lip_consonant_shuts_further() {
     assert!(closure > none + 0.05, "a lip consonant dips further: {closure} vs {none}");
 }
 
-/// Beak opening in the middle of each of two tied notes (a run), in the lively style.
+/// Beak opening in the middle of each of two tied notes (a run), in the lively style. A narrow
+/// vowel, because a wide one (ah) is already at the top of the beak's range and cannot open more.
 fn run_openings(from: u8, to: u8) -> (f32, f32) {
     let json = format!(
         r#"{{"schema":"kivi.duck/1","tempoBpm":120,"events":[
-        {{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":{from},"volume":0.8,"sounding":[[0,500]]}},
-        {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"ah","midiNote":{to},"volume":0.8,"continuesPrevious":true,"sounding":[[500,1000]]}}]}}"#
+        {{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"oo","midiNote":{from},"volume":0.8,"sounding":[[0,500]]}},
+        {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"oo","midiNote":{to},"volume":0.8,"continuesPrevious":true,"sounding":[[500,1000]]}}]}}"#
     );
     let perf = DuckScore::parse(json.as_bytes()).unwrap().to_performance("t").unwrap();
     let style = singer::Style::by_name("lively").unwrap();
