@@ -268,7 +268,10 @@ async fn play(
     body: Option<Json<PlayBody>>,
 ) -> Res<Json<Value>> {
     let b = body.map(|j| j.0).unwrap_or_default();
-    let view = s.app.play(&id, b.revision.as_deref(), b.mute, None).await?;
+    let view = s
+        .app
+        .play(&id, b.revision.as_deref(), b.mute, b.head_scale)
+        .await?;
     Ok(Json(json!({"accepted": true, "playback": view})))
 }
 

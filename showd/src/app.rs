@@ -389,6 +389,7 @@ impl App {
         id: &str,
         revision: Option<&str>,
         mute: bool,
+        head_scale: Option<f64>,
     ) -> Result<PlaybackView, ApiError> {
         let entry = self
             .store
