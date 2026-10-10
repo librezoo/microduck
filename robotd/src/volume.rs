@@ -66,6 +66,17 @@ impl Volume {
         }
     }
 
+    /// Set the level now, without touching the config file. A caller that wants it kept keeps it
+    /// (the show service re-applies its own at start); the file's own value comes back at the
+    /// next restart, which is `[audio] volume`'s meaning.
+    pub fn set_now(&mut self, percent: u8) {
+        if percent != self.applied {
+            tracing::info!(volume = percent, "speaker volume set");
+            (self.set)(percent);
+            self.applied = percent;
+        }
+    }
+
     /// Called once a second. A `stat` when nothing changed; a parse and possibly a mixer write when
     /// something did.
     pub fn poll(&mut self) {

@@ -19,6 +19,7 @@ sounds = { path = "../sounds" }
 # What the beak and the head do while a song is sung: a compiled performance, sampled by song
 # time. Pure computation; `robotd` owns the clock, the joints and who is allowed to move them.
 singer = { path = "../singer" }
+hound.workspace = true
 clap = { workspace = true, features = ["derive"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -665,6 +665,11 @@ struct RobotState {
     /// Whether this robot's config allows it to sing with others. Read once at startup, like the
     /// policies: `[chorale] accept`, false by default.
     chorale_accepted: bool,
+    /// Where show audio may be read from (`DUCK_SHOW_ROOT`, default `/var/lib/showd/shows`).
+    show_root: PathBuf,
+    /// A performance is running — set by the control loop, read by the IPC side to refuse a
+    /// pause or a seek when there is nothing to pause.
+    performing: AtomicBool,
     /// `walk` or `roller`, as `robot.mode` reports it.
     ///
     /// Not constant any more: `robot.setMode` switches it while the robot runs, so this is stored
@@ -747,6 +752,10 @@ impl RobotState {
             theremin_ready: AtomicBool::new(false),
             theremin_allowed: params.theremin.enabled && params.audio.enabled,
             chorale_accepted: params.chorale.accept,
+            show_root: std::env::var_os("DUCK_SHOW_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/var/lib/showd/shows")),
+            performing: AtomicBool::new(false),
             mode: AtomicU8::new(mode_code(params.policy.mode)),
             fallen: AtomicBool::new(false),
             moving: AtomicBool::new(false),
@@ -3437,7 +3446,7 @@ async fn control_loop<T: RobotIo>(
         // running it *is* the beak and a performance yields to it — and before the mouth intent,
         // which a performance overrides for as long as it lasts.
         let mut sing_state = None;
-        if let Some(command) = intents.take_sing() {
+        for command in intents.take_sing() {
             match command {
                 sing::Command::Stop => {
                     if let Some(p) = performer.as_mut() {
@@ -3452,9 +3461,22 @@ async fn control_loop<T: RobotIo>(
                     } else {
                         if let Some(voice) = voice.as_mut() {
                             voice.sing_stop();
+                            voice.file_stop();
                         }
                         tracing::warn!(song = %job.show.perf.name, "sing: starting");
                         performer = Some(sing::Performer::new(job, tick_start));
+                    }
+                }
+                sing::Command::Control(sing::Control::Volume(percent)) => {
+                    if let Some(volume) = volume.as_mut() {
+                        volume.set_now(percent);
+                    }
+                }
+                sing::Command::Control(control) => {
+                    if let Some(p) = performer.as_mut()
+                        && let Err(reason) = p.control(control, tick_start)
+                    {
+                        tracing::warn!(%reason, "sing: control refused");
                     }
                 }
             }
@@ -3464,6 +3486,7 @@ async fn control_loop<T: RobotIo>(
                 p.stop();
             }
             let step = p.tick(tick_start, period.as_secs_f32());
+            let mut audio_s = None;
             if let Some(voice) = voice.as_mut() {
                 match p.audio(tick_start) {
                     Some((score, part, beats)) => {
@@ -3474,26 +3497,53 @@ async fn control_loop<T: RobotIo>(
                     None if p.audio_over(tick_start) => voice.sing_stop(),
                     None => {}
                 }
+                // The show's own audio, when it has one: the performer says what changed.
+                for op in p.audio_ops(tick_start) {
+                    match (op, p.file()) {
+                        (sing::AudioOp::Start { frame }, Some(f)) => {
+                            if !voice.file_start(f.pcm.clone(), f.rate, f.channels, frame) {
+                                // No speaker: the show goes on, silent, rather than not at all.
+                                p.file_ended();
+                            }
+                        }
+                        (sing::AudioOp::Pause(paused), _) => voice.file_pause(paused),
+                        (sing::AudioOp::Seek { frame }, _) => voice.file_seek(frame),
+                        (sing::AudioOp::Stop, _) => voice.file_stop(),
+                        _ => {}
+                    }
+                }
+                if voice.file_finished() {
+                    voice.file_stop();
+                    p.file_ended();
+                }
+                if let (Some(frames), Some(f)) = (voice.file_position_frames(), p.file()) {
+                    audio_s = Some(frames as f64 / f64::from(f.rate));
+                }
             }
             match step {
-                Some((frame, state_block)) => {
+                Some((frame, mut state_block)) => {
                     if snapshot.enabled && bringup == Bringup::Ready {
                         targets[duck_control::model::MOUTH_INDEX] =
                             duck_control::model::mouth_target(f64::from(frame.mouth));
                     }
                     sing_head = frame.head.map(f64::from);
+                    state_block.audio_s = audio_s;
                     sing_state = Some(state_block);
                 }
                 None => {
                     tracing::warn!("sing: finished");
                     if let Some(voice) = voice.as_mut() {
                         voice.sing_stop();
+                        voice.file_stop();
                     }
                     performer = None;
                     sing_head = [0.0; 4];
                 }
             }
         }
+        state
+            .performing
+            .store(performer.is_some(), Ordering::Relaxed);
 
         // The mouth is not part of any policy; the intent is the only thing that moves it.
         // Only while driving — a held or homing robot keeps whatever its hold pose says, so
@@ -4963,16 +5013,50 @@ fn dispatch(
         // and the compile happens on this task rather than on the control thread: the loop is
         // handed a finished show and only has to run it.
         proto::Call::RobotSing(p) => {
-            let result = match sing::prepare(p, state.chorale_accepted, state.has_voice) {
-                Ok((command, result)) => {
-                    intents.request_sing(command);
-                    result
+            let result =
+                match sing::prepare(p, state.chorale_accepted, state.has_voice, &state.show_root) {
+                    Ok((command, result)) => {
+                        intents.request_sing(command);
+                        result
+                    }
+                    Err(reason) => proto::SingResult {
+                        accepted: false,
+                        reason: Some(reason),
+                        ..Default::default()
+                    },
+                };
+            proto::Response::ok(Some(id), &result)
+        }
+
+        // Pause, resume, seek or set the volume of the performance that is running.
+        proto::Call::RobotSingControl(p) => {
+            use proto::SingAction as A;
+            let refuse = |reason: &str| proto::SingResult {
+                accepted: false,
+                reason: Some(reason.to_owned()),
+                ..Default::default()
+            };
+            let performing = state.performing.load(Ordering::Relaxed);
+            let result = match (p.action, p.position_s, p.volume) {
+                (A::Volume, _, Some(v)) if v <= 100 => {
+                    intents.request_sing(sing::Command::Control(sing::Control::Volume(v)));
+                    proto::SingResult::default()
                 }
-                Err(reason) => proto::SingResult {
-                    accepted: false,
-                    reason: Some(reason),
-                    ..Default::default()
-                },
+                (A::Volume, _, _) => refuse("volume needs a level 0..100"),
+                (_, _, _) if !performing => refuse("nothing is being performed"),
+                (A::Pause, _, _) => {
+                    intents.request_sing(sing::Command::Control(sing::Control::Pause));
+                    proto::SingResult::default()
+                }
+                (A::Resume, _, _) => {
+                    intents.request_sing(sing::Command::Control(sing::Control::Resume));
+                    proto::SingResult::default()
+                }
+                (A::Seek, Some(t), _) if t.is_finite() && t >= 0.0 => {
+                    intents.request_sing(sing::Command::Control(sing::Control::Seek(t)));
+                    proto::SingResult::default()
+                }
+                (A::Seek, _, _) => refuse("seek needs a position in seconds"),
             };
             proto::Response::ok(Some(id), &result)
         }

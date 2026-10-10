@@ -241,6 +241,18 @@ enum Namespace {
         /// Calibration: scale every head amplitude (1.0 = the style's own; bounded by the budgets).
         #[arg(long)]
         head_scale: Option<f64>,
+        /// Pause the running performance: the beak and head go to rest, the audio is held.
+        #[arg(long, conflicts_with_all = ["resume", "seek", "volume", "off"])]
+        pause: bool,
+        /// Resume a paused performance.
+        #[arg(long, conflicts_with_all = ["seek", "volume", "off"])]
+        resume: bool,
+        /// Jump to this many seconds into the song.
+        #[arg(long, conflicts_with_all = ["volume", "off"])]
+        seek: Option<f64>,
+        /// Set the speaker volume, 0–100.
+        #[arg(long, conflicts_with = "off")]
+        volume: Option<u8>,
         /// Print one line per second as JSON instead of the live readout.
         #[arg(long)]
         json: bool,
@@ -818,6 +830,41 @@ fn run_theremin(socket: &Path, off: bool) -> Result<(), Failure> {
     Ok(())
 }
 
+/// `robotctl sing --pause | --resume | --seek S | --volume N`.
+fn run_sing_control(
+    socket: &Path,
+    pause: bool,
+    resume: bool,
+    seek: Option<f64>,
+    volume: Option<u8>,
+) -> Result<(), Failure> {
+    let mut client = Client::connect_to("robotd", socket)?;
+    client.hello()?;
+    let (action, position_s, level) = match (pause, resume, seek, volume) {
+        (true, ..) => (proto::SingAction::Pause, None, None),
+        (_, true, ..) => (proto::SingAction::Resume, None, None),
+        (_, _, Some(t), _) => (proto::SingAction::Seek, Some(t), None),
+        (_, _, _, Some(v)) => (proto::SingAction::Volume, None, Some(v)),
+        _ => unreachable!("the caller checked"),
+    };
+    let result = result_of(client.call(&proto::Call::RobotSingControl(
+        proto::SingControlParams {
+            action,
+            position_s,
+            volume: level,
+        },
+    ))?)?;
+    let answer: proto::SingResult = decode(&result)?;
+    if !answer.accepted {
+        return Err(Failure::new(
+            exit::REFUSED,
+            answer.reason.unwrap_or_else(|| "refused".to_owned()),
+        ));
+    }
+    println!("ok");
+    Ok(())
+}
+
 /// `robotctl sing` — perform a song alone, and watch where it is.
 #[allow(clippy::too_many_arguments)]
 fn run_sing(
@@ -852,6 +899,8 @@ fn run_sing(
             head_latency_ms: latency[1].filter(|_| active),
             audio_latency_ms: latency[2].filter(|_| active),
             head_scale: latency[3].filter(|_| active),
+            audio: None,
+            head_keys: Vec::new(),
         }))?)?;
         decode(&result)
     };
@@ -5657,8 +5706,15 @@ fn run(cli: Cli) -> Result<(), Failure> {
             head_latency_ms,
             audio_latency_ms,
             head_scale,
+            pause,
+            resume,
+            seek,
+            volume,
             json,
         } => {
+            if pause || resume || seek.is_some() || volume.is_some() {
+                return run_sing_control(&cli.robot_socket, pause, resume, seek, volume);
+            }
             let latency = [
                 mouth_latency_ms,
                 head_latency_ms,

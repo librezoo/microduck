@@ -739,6 +739,10 @@ pub mod method {
     /// `singer::Performance`, which is what an analysed song compiles from. Design:
     /// `docs/ideas/singing-performance.md`.
     pub const ROBOT_SING: &str = "robot.sing";
+    /// Pause, resume, seek or set the volume of the performance that is running. Discrete; the
+    /// answer is [`super::SingResult`]. Refused when nothing is being performed (except `volume`,
+    /// which is the speaker's and needs no performance).
+    pub const ROBOT_SING_CONTROL: &str = "robot.singControl";
     /// Sit down gracefully, then power the machine off. The prototype's Select long-press.
     pub const ROBOT_SHUTDOWN: &str = "robot.shutdown";
     /// Which drive mode this `robotd` is in: `walk` or `roller`.
@@ -1066,6 +1070,8 @@ pub enum Call {
     RobotChorale(ChoraleParams),
     /// Perform a song alone. Discrete; the answer is [`SingResult`].
     RobotSing(SingParams),
+    /// Pause, resume, seek or set the volume. Discrete; the answer is [`SingResult`].
+    RobotSingControl(SingControlParams),
     /// `btd` subscribing to what it should advertise. Answered, then a stream of
     /// [`method::CHORALE_BEACON`] notifications.
     ChoraleSubscribe,
@@ -1244,6 +1250,7 @@ impl Call {
             Call::RobotTheremin(_) => method::ROBOT_THEREMIN,
             Call::RobotChorale(_) => method::ROBOT_CHORALE,
             Call::RobotSing(_) => method::ROBOT_SING,
+            Call::RobotSingControl(_) => method::ROBOT_SING_CONTROL,
             Call::ChoraleSubscribe => method::CHORALE_SUBSCRIBE,
             Call::ChoraleBeaconSet(_) => method::CHORALE_BEACON,
             Call::ChoraleHeard(_) => method::CHORALE_HEARD,
@@ -1430,6 +1437,7 @@ impl Call {
             | Call::RobotTheremin(_)
             | Call::RobotChorale(_)
             | Call::RobotSing(_)
+            | Call::RobotSingControl(_)
             | Call::RobotSetMode(_)
             | Call::RobotLoadPolicy(_)
             | Call::RobotReloadPolicies
@@ -1547,6 +1555,7 @@ impl Call {
             Call::RobotTheremin(p) => encode(p),
             Call::RobotChorale(p) => encode(p),
             Call::RobotSing(p) => encode(p),
+            Call::RobotSingControl(p) => encode(p),
             Call::ChoraleBeaconSet(p) => encode(p),
             Call::ChoraleHeard(p) => encode(p),
             Call::RobotSubscribe(p) => encode(p),
@@ -1639,6 +1648,7 @@ impl Call {
             method::ROBOT_THEREMIN => Call::RobotTheremin(decode(params)?),
             method::ROBOT_CHORALE => Call::RobotChorale(decode(params)?),
             method::ROBOT_SING => Call::RobotSing(decode(params)?),
+            method::ROBOT_SING_CONTROL => Call::RobotSingControl(decode(params)?),
             method::CHORALE_SUBSCRIBE => Call::ChoraleSubscribe,
             method::CHORALE_BEACON => Call::ChoraleBeaconSet(decode(params)?),
             method::CHORALE_HEARD => Call::ChoraleHeard(decode(params)?),
@@ -1808,6 +1818,13 @@ pub mod test_support {
                 head_latency_ms: Some(220.0),
                 audio_latency_ms: None,
                 head_scale: Some(1.5),
+                audio: None,
+                head_keys: Vec::new(),
+            }),
+            Call::RobotSingControl(SingControlParams {
+                action: SingAction::Seek,
+                position_s: Some(12.5),
+                volume: None,
             }),
             Call::RobotSound(SoundParams {
                 tag: SoundTag::Chirp,
@@ -5040,6 +5057,55 @@ pub struct SingParams {
     /// still bound the result, so scaling up cannot ask for more than the profile allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_scale: Option<f64>,
+    /// A WAV the robot plays on the show clock — the app's mixed audio. The path must lie under the
+    /// robot's show library; anything else is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<SingAudio>,
+    /// Extra head motion (a motion track's `head` clips) added to the performance's own, on the
+    /// show clock, linearly interpolated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub head_keys: Vec<SingHeadKey>,
+}
+
+/// See [`SingParams::audio`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingAudio {
+    pub path: String,
+    /// Where the audio starts on the show clock, milliseconds.
+    #[serde(default)]
+    pub start_offset_ms: i64,
+}
+
+/// One head keyframe on the show clock: offsets `[neck_pitch, head_pitch, head_yaw, head_roll]`,
+/// radians, added to wherever the head was told to look.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingHeadKey {
+    pub t_ms: u64,
+    pub offsets: [f64; 4],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SingAction {
+    Pause,
+    Resume,
+    /// Jump to `position_s` of the song.
+    Seek,
+    /// Speaker volume 0..100 (the codec's mixer; not saved — the caller keeps the preference).
+    Volume,
+}
+
+/// See [`method::ROBOT_SING_CONTROL`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SingControlParams {
+    pub action: SingAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_s: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume: Option<u8>,
 }
 
 /// Answer to [`Call::RobotSing`].
@@ -5089,6 +5155,12 @@ pub struct SingState {
     /// in radians.
     pub mouth: f64,
     pub head: [f64; 4],
+    /// Paused: the beak is at rest and the audio is held.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub paused: bool,
+    /// Where the played audio is, seconds into the file, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_s: Option<f64>,
 }
 
 /// Answer to [`Call::RobotChorale`].
@@ -5809,7 +5881,7 @@ mod tests {
     fn every_call_covers_every_variant() {
         assert_eq!(
             every_call().len(),
-            69,
+            70,
             "a Call variant was added or removed — update every_call() and this count"
         );
     }

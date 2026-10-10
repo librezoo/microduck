@@ -169,9 +169,9 @@ pub struct Intents {
     /// superseded. A beacon is an *event* carrying an arrival time, and a beat dropped by
     /// last-writer-wins is a beat the phase lock never gets to average.
     chorale_heard: std::sync::Mutex<Vec<duck_ipc_proto::ChoraleHeard>>,
-    /// A pending solo-performance command. A slot, not a queue: the last request wins, and a
-    /// stop that overtakes a start is exactly what was asked for.
-    sing: std::sync::Mutex<Option<crate::sing::Command>>,
+    /// Pending solo-performance commands. A start or a stop replaces what was waiting, so a stop
+    /// that overtakes a start is exactly what was asked for; controls queue in order.
+    sing: std::sync::Mutex<Vec<crate::sing::Command>>,
     /// Pending skill requests, a bitmask taken (swapped to zero) once per tick. A mask
     /// rather than one slot so two different buttons in the same tick both arrive.
     skills: std::sync::atomic::AtomicU32,
@@ -283,7 +283,7 @@ impl Intents {
             chorale: AtomicU8::new(THEREMIN_NONE),
             chorale_piece: AtomicU8::new(0),
             chorale_heard: std::sync::Mutex::new(Vec::new()),
-            sing: std::sync::Mutex::new(None),
+            sing: std::sync::Mutex::new(Vec::new()),
             skills: std::sync::atomic::AtomicU32::new(0),
             shutdown: AtomicBool::new(false),
             mode_switch: AtomicU8::new(MODE_NONE),
@@ -531,12 +531,18 @@ impl Intents {
     /// Hand the loop a solo-performance command. The song is already compiled — see
     /// [`crate::sing::prepare`] — so the loop's whole job is to run it.
     pub fn request_sing(&self, command: crate::sing::Command) {
-        *self.sing.lock().expect("not poisoned") = Some(command);
+        let mut queue = self.sing.lock().expect("not poisoned");
+        // A start or a stop replaces everything still waiting: what came before it is moot. A
+        // control (pause, seek…) is kept in order behind it.
+        if !matches!(command, crate::sing::Command::Control(_)) {
+            queue.clear();
+        }
+        queue.push(command);
     }
 
-    /// The pending performance command, cleared by the read.
-    pub fn take_sing(&self) -> Option<crate::sing::Command> {
-        self.sing.lock().expect("not poisoned").take()
+    /// The pending performance commands, in order, cleared by the read.
+    pub fn take_sing(&self) -> Vec<crate::sing::Command> {
+        std::mem::take(&mut *self.sing.lock().expect("not poisoned"))
     }
 
     /// A beacon `btd` heard. Queued rather than latched: two ducks' beacons in one tick are two

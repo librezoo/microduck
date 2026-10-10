@@ -3857,6 +3857,7 @@ dependencies = [
  "clap",
  "duck-control",
  "duck-ipc-proto",
+ "hound",
  "kinematics",
  "libc",
  "minisign",

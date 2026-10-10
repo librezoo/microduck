@@ -795,6 +795,7 @@ impl Server {
             | Call::RobotTheremin(_)
             | Call::RobotChorale(_)
             | Call::RobotSing(_)
+            | Call::RobotSingControl(_)
             | Call::ChoraleSubscribe
             | Call::ChoraleBeaconSet(_)
             | Call::ChoraleHeard(_)

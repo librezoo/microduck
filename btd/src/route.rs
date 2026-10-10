@@ -285,7 +285,7 @@ fn permits(call: &proto::Call) -> bool {
         // the radio would let this too. It is held back until the phone app has a reason to ask
         // for it and a performance's *state* has a way to reach it: opening a call whose progress
         // the radio cannot report would be a button that looks like it did nothing.
-        RobotSing(_) => false,
+        RobotSing(_) | RobotSingControl(_) => false,
 
         // The chorale's own namespace is between `btd` and `robotd` — it is how this daemon is told
         // what to advertise and how it reports what it heard. Not a client surface at all, so a

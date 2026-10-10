@@ -101,6 +101,24 @@ enum Ride {
     /// The chorale holds the PCM: a writer thread is rendering one part of a score at whatever
     /// position the loop last published.
     Singing,
+    /// A show's audio holds the PCM: a writer thread is streaming a decoded WAV that the loop can
+    /// pause, resume and seek.
+    File,
+}
+
+/// What the loop tells a file-playing writer thread. Atomics for the reason [`Live`] gives.
+#[derive(Debug)]
+struct FileLive {
+    /// Cleared to make the writer stop and let go of the pipe.
+    running: AtomicBool,
+    paused: AtomicBool,
+    /// A seek is a (generation, frame) pair: the writer jumps when the generation moves.
+    seek_gen: AtomicU64,
+    seek_frame: AtomicU64,
+    /// Frames written so far — where the audio is.
+    played: AtomicU64,
+    /// The writer reached the end of the file.
+    finished: AtomicBool,
 }
 
 /// The theremin's parameters, as the control loop hands them to the writer thread.
@@ -187,6 +205,8 @@ pub struct Sound {
     /// The live parameters of whatever the writer thread is rendering — a theremin's pitch, or a
     /// chorale's score position.
     live: Option<Arc<Live>>,
+    /// The file player's controls, while one is running.
+    file_live: Option<Arc<FileLive>>,
     /// The piece and part being sung, so a tick that asks for the same one does not restart the
     /// voice mid-phrase.
     singing: Option<(String, sounds::chorale::Part)>,
@@ -206,6 +226,7 @@ impl Sound {
             ride: Ride::Off,
             warned_missing: false,
             live: None,
+            file_live: None,
             singing: None,
             personality: None,
         }
@@ -240,6 +261,9 @@ impl Sound {
         // `EPIPE` its next write returns is what gets it out if it was already inside one.
         if let Some(live) = self.live.take() {
             live.playing.store(false, Ordering::Relaxed);
+        }
+        if let Some(file) = self.file_live.take() {
+            file.running.store(false, Ordering::Relaxed);
         }
         self.singing = None;
         self.ride = Ride::Off;
@@ -544,6 +568,145 @@ impl Sound {
         true
     }
 
+    /// Stream a decoded WAV to the speaker, from `start_frame`. The loop controls it afterwards
+    /// with [`Self::file_pause`] and [`Self::file_seek`]; it ends by itself at the end of the file
+    /// ([`Self::file_finished`]) and is let go with [`Self::file_stop`].
+    ///
+    /// `pcm` is interleaved signed 16-bit. A bigger ALSA buffer than the synthesised voices use:
+    /// there is no gesture to stay close to, and a longer one rides out a busy tick — at the cost of
+    /// the pause taking up to that long to be heard, which is why the buffer is not larger.
+    pub fn file_start(
+        &mut self,
+        pcm: Arc<Vec<i16>>,
+        rate: u32,
+        channels: u8,
+        start_frame: usize,
+    ) -> bool {
+        self.stop_child();
+        let child = Command::new("aplay")
+            .args(["-q", "-D", &self.device, "-t", "raw", "-f", "S16_LE"])
+            .args(["-c", &channels.to_string(), "-r", &rate.to_string()])
+            .args(["--buffer-time=80000", "--period-time=20000"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(mut child) = child else {
+            tracing::warn!("aplay failed; the show's audio is not played");
+            return false;
+        };
+        let Some(mut stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            return false;
+        };
+        self.child = Some(child);
+        self.ride = Ride::File;
+        let live = Arc::new(FileLive {
+            running: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
+            seek_gen: AtomicU64::new(0),
+            seek_frame: AtomicU64::new(0),
+            played: AtomicU64::new(start_frame as u64),
+            finished: AtomicBool::new(false),
+        });
+        self.file_live = Some(live.clone());
+        let channels = usize::from(channels.max(1));
+        let total = pcm.len() / channels;
+        let spawned = std::thread::Builder::new()
+            .name("show-audio".into())
+            .spawn(move || {
+                use std::io::Write;
+                block_sigpipe();
+                let block_frames = (rate as usize / 50).max(1);
+                let mut cursor = start_frame.min(total);
+                let mut seen_gen = 0u64;
+                let mut anchor: Option<(Instant, usize)> = None;
+                let mut bytes = Vec::with_capacity(block_frames * channels * 2);
+                loop {
+                    if !live.running.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let generation = live.seek_gen.load(Ordering::Relaxed);
+                    if generation != seen_gen {
+                        seen_gen = generation;
+                        cursor = (live.seek_frame.load(Ordering::Relaxed) as usize).min(total);
+                        anchor = None;
+                    }
+                    if live.paused.load(Ordering::Relaxed) {
+                        anchor = None;
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    if cursor >= total {
+                        live.finished.store(true, Ordering::Relaxed);
+                        return; // dropping the pipe lets `aplay` drain and exit
+                    }
+                    let n = block_frames.min(total - cursor);
+                    bytes.clear();
+                    for sample in &pcm[cursor * channels..(cursor + n) * channels] {
+                        bytes.extend_from_slice(&sample.to_le_bytes());
+                    }
+                    let (t0, base) = *anchor.get_or_insert_with(|| (Instant::now(), cursor));
+                    if stdin.write_all(&bytes).is_err() {
+                        live.finished.store(true, Ordering::Relaxed);
+                        return; // `aplay` is gone
+                    }
+                    cursor += n;
+                    live.played.store(cursor as u64, Ordering::Relaxed);
+                    let ahead =
+                        (cursor - base) as f64 / f64::from(rate) - t0.elapsed().as_secs_f64();
+                    if ahead > 0.06 {
+                        std::thread::sleep(Duration::from_secs_f64(ahead - 0.06));
+                    }
+                }
+            });
+        if spawned.is_err() {
+            tracing::warn!("cannot spawn the show audio writer");
+            self.stop_child();
+            return false;
+        }
+        tracing::warn!(rate, channels, start_frame, "show: audio playing");
+        true
+    }
+
+    pub fn file_pause(&self, paused: bool) {
+        if let Some(live) = self.file_live.as_ref() {
+            live.paused.store(paused, Ordering::Relaxed);
+        }
+    }
+
+    pub fn file_seek(&self, frame: usize) {
+        if let Some(live) = self.file_live.as_ref() {
+            live.seek_frame.store(frame as u64, Ordering::Relaxed);
+            live.seek_gen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Frames the writer has handed to `aplay`, when a file is playing.
+    pub fn file_position_frames(&self) -> Option<usize> {
+        self.file_live
+            .as_ref()
+            .map(|l| l.played.load(Ordering::Relaxed) as usize)
+    }
+
+    /// Whether the writer has reached the end of the file (or lost its `aplay`).
+    pub fn file_finished(&self) -> bool {
+        self.file_live
+            .as_ref()
+            .is_some_and(|l| l.finished.load(Ordering::Relaxed))
+    }
+
+    /// Let go of the file: the writer stops and the PCM is freed once `aplay` has drained.
+    pub fn file_stop(&mut self) {
+        if self.ride != Ride::File {
+            return;
+        }
+        if let Some(live) = self.file_live.take() {
+            live.running.store(false, Ordering::Relaxed);
+        }
+        self.ride = Ride::Landing;
+    }
+
     /// Where in the score to sing. Cheap enough for every tick.
     pub fn sing_at(&self, beats: f64, singing: bool) {
         if let Some(live) = self.live.as_ref() {
@@ -638,7 +801,7 @@ impl Sound {
     /// held — which is correct, and is why a quack right after letting go is dropped rather
     /// than talking over the tail of the note.
     pub fn theremin_settle(&mut self) {
-        if self.ride == Ride::Landing && self.live.is_none() {
+        if self.ride == Ride::Landing && self.live.is_none() && self.file_live.is_none() {
             self.reap_landing();
         }
     }
@@ -676,7 +839,7 @@ impl Sound {
         // the pad), and a ride restarting under a theremin would be an instrument that
         // stops whenever the player touches anything. The instrument keeps the PCM until
         // the loop takes it away; the trigger is simply inaudible while it does.
-        if matches!(self.ride, Ride::Theremin | Ride::Singing) {
+        if matches!(self.ride, Ride::Theremin | Ride::Singing | Ride::File) {
             return;
         }
         match hold {
