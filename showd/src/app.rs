@@ -88,7 +88,8 @@ pub struct Song {
     pub revision: String,
     pub duration: f64,
     pub bytes: u64,
-    pub updated_at: u64,
+    /// Seconds since the epoch, as a float — what Studio's own device service reports.
+    pub updated_at: f64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -200,6 +201,10 @@ struct Current {
     timeline: Option<Timeline>,
     start_pose: Pose,
     last_position: f64,
+    /// What the app just asked for, reported until the robot's own (slightly stale) state agrees:
+    /// a pause answered with "playing" would put the wrong button on the screen.
+    hint_paused: Option<(bool, Instant)>,
+    hint_position: Option<(f64, Instant)>,
 }
 
 struct Inner {
@@ -220,9 +225,29 @@ pub struct App {
     last_key: Mutex<String>,
 }
 
+/// Left knee angle, radians, above which the robot is sitting and below which it is standing.
+/// Measured on the first robot: standing 0.0–0.1, sitting 1.29. Between the two it is moving.
+const KNEE_SITTING: f64 = 0.8;
+const KNEE_STANDING: f64 = 0.25;
+
+/// What pose the robot is **actually** in. The policy's name is not evidence: a robot that was
+/// restarted while seated and then raised can be standing under a "sit" label, which is how a show
+/// ended up being sung standing when the person watching had asked for sitting. The joints do not
+/// have a label to be stale.
 fn pose_of(st: &proto::RobotState) -> Pose {
     if st.safety.fallen || st.safety.limp || st.safety.picked_up {
         return Pose::Unknown;
+    }
+    // `joints` is indexed as the wire's JOINT_NAMES: the left knee is 3. A state with no joints
+    // (a fake, or a robot that has not read the bus yet) falls back to the label.
+    if let Some(&knee) = st.joints.get(3) {
+        return if knee >= KNEE_SITTING {
+            Pose::Sitting
+        } else if knee <= KNEE_STANDING {
+            Pose::Standing
+        } else {
+            Pose::Unknown
+        };
     }
     let p = st.policy.as_str();
     if p.contains("sit") {
@@ -333,7 +358,7 @@ impl App {
             revision: e.meta.revision.clone(),
             duration: e.manifest.duration_ms as f64 / 1000.0,
             bytes: e.meta.total_bytes,
-            updated_at: e.meta.updated_at_ms,
+            updated_at: e.meta.updated_at_ms as f64 / 1000.0,
         }
     }
 
@@ -551,6 +576,8 @@ impl App {
                 timeline: timeline.clone(),
                 start_pose,
                 last_position: 0.0,
+                hint_paused: None,
+                hint_position: None,
             });
         }
         self.version.fetch_add(1, Ordering::Relaxed);
@@ -593,12 +620,14 @@ impl App {
     pub async fn pause(&self) -> Result<PlaybackView, ApiError> {
         self.require_boundary("pause")?;
         self.sing_control(proto::SingAction::Pause, None).await?;
+        self.hint(|c| c.hint_paused = Some((true, Instant::now())));
         self.version.fetch_add(1, Ordering::Relaxed);
         Ok(self.refresh().0)
     }
 
     pub async fn resume(&self) -> Result<PlaybackView, ApiError> {
         self.sing_control(proto::SingAction::Resume, None).await?;
+        self.hint(|c| c.hint_paused = Some((false, Instant::now())));
         self.version.fetch_add(1, Ordering::Relaxed);
         Ok(self.refresh().0)
     }
@@ -632,6 +661,7 @@ impl App {
         }
         self.require_boundary("seek")?;
         self.sing_control(proto::SingAction::Seek, Some(to)).await?;
+        self.hint(|c| c.hint_position = Some((to, Instant::now())));
         self.version.fetch_add(1, Ordering::Relaxed);
         Ok(self.refresh().0)
     }
@@ -645,6 +675,12 @@ impl App {
         self.apply_volume().await;
         self.version.fetch_add(1, Ordering::Relaxed);
         Ok(())
+    }
+
+    fn hint(&self, f: impl FnOnce(&mut Current)) {
+        if let Some(cur) = self.inner.lock().expect("not poisoned").cur.as_mut() {
+            f(cur);
+        }
     }
 
     /// Pause and seek are only allowed between coarse actions: a skill cannot be frozen halfway
@@ -724,7 +760,25 @@ impl App {
                 cur.seen_sing = true;
                 cur.last_position = s.t_s.max(0.0);
                 view.position = cur.last_position;
-                view.status = if s.paused {
+                // What was just asked for stands until the robot's state agrees with it, for at
+                // most a moment: it is a bridge over the state stream's latency, not a belief.
+                let mut paused = s.paused;
+                if let Some((want, at)) = cur.hint_paused {
+                    if want == s.paused || at.elapsed() > Duration::from_millis(1500) {
+                        cur.hint_paused = None;
+                    } else {
+                        paused = want;
+                    }
+                }
+                if let Some((to, at)) = cur.hint_position {
+                    if (s.t_s - to).abs() < 0.6 || at.elapsed() > Duration::from_millis(1500) {
+                        cur.hint_position = None;
+                    } else {
+                        cur.last_position = to;
+                        view.position = to;
+                    }
+                }
+                view.status = if paused {
                     "paused"
                 } else if s.phase == "settling" {
                     if cur.stop_requested {

@@ -26,9 +26,47 @@ pub struct Shared {
     pub auth: Arc<Auth>,
 }
 
+/// What the app shows a person. Kivi Studio puts the `error` field on screen as it is, and its
+/// users read Chinese, so that is what it carries; the English detail follows for the log and for
+/// whoever is debugging, and `code` and `problems` are for the app to act on.
+fn sentence(code: &str) -> &'static str {
+    match code {
+        "Unauthorized" => "请先与这只鸭子配对",
+        "BadCode" => "配对码不正确",
+        "Locked" => "配对尝试过多，请一分钟后重试",
+        "Rebooted" => "鸭子已重启，请重新同步曲库",
+        "Stale" => "鸭子里的歌曲已被更新，请同步后重试",
+        "NotFound" => "设备中没有这首歌，请重新同步曲库",
+        "NotPlaying" => "当前没有正在播放的歌曲",
+        "Busy" => "鸭子正忙：歌曲正在播放，或一个动作正在进行，请稍后再试",
+        "PoseMismatch" => "动作与鸭子当前的姿态不符",
+        "ActionUnsupported" => "这只鸭子不支持其中的某个动作",
+        "OutOfRange" => "动作或音符的幅度超出鸭子允许的范围",
+        "TooFast" => "某个动作太快，鸭子做不到",
+        "TooShort" => "某个动作的时长太短",
+        "Overlap" => "动作或音符的时间重叠了",
+        "Corrupt" => "曲目文件不完整或已损坏，请重新传入",
+        "Missing" => "曲目还没有传完整，请重新传入",
+        "TooLarge" => "曲目文件过大",
+        "NotEnabled" => "鸭子还没有允许表演，需要在设置里开启",
+        "RobotUnavailable" => "鸭子的控制程序暂时没有响应",
+        "RobotUnsafe" => "鸭子摔倒、被抬起或松力矩，表演已停止",
+        "Incompatible" => "曲目格式与这只鸭子不兼容，请更新应用或鸭子",
+        "BadRequest" => "请求不合法",
+        "Refused" => "鸭子拒绝了这个请求",
+        _ => "操作没有成功",
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = json!({"error": self.message, "code": self.code, "problems": self.problems});
+        let zh = sentence(self.code);
+        let error = if self.message.is_empty() {
+            zh.to_owned()
+        } else {
+            format!("{zh}（{}）", self.message)
+        };
+        let body = json!({"error": error, "code": self.code, "detail": self.message, "problems": self.problems});
         (
             StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             Json(body),
@@ -60,6 +98,53 @@ pub fn router(shared: Shared) -> Router {
         .route("/api/v1/pair", post(pair))
         .nest("/api/v1", authed)
         .with_state(shared)
+        .layer(middleware::from_fn(cors))
+}
+
+/// CORS, as Kivi's own device service does it: the app is a web page (or a Capacitor/Tauri shell)
+/// on another origin, so every call is cross-origin, and one that carries `Authorization` is
+/// preflighted. Chrome also asks, for a request to a private address, whether the device accepts
+/// it (`Access-Control-Request-Private-Network`) and refuses without a yes. Anything but a web-ish
+/// origin gets no `Allow-Origin` and so is not served to a page.
+async fn cors(req: Request, next: Next) -> Response {
+    let origin = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .filter(|o| {
+            ["http://", "https://", "capacitor://", "tauri://"]
+                .iter()
+                .any(|p| o.starts_with(p))
+        })
+        .map(str::to_owned);
+    let mut resp = if req.method() == axum::http::Method::OPTIONS {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(req).await
+    };
+    let h = resp.headers_mut();
+    if let Some(o) = origin
+        && let Ok(v) = o.parse()
+    {
+        h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
+        h.insert(header::VARY, "Origin".parse().expect("static"));
+    }
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        "GET, POST, PUT, DELETE, OPTIONS".parse().expect("static"),
+    );
+    h.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        "Authorization, Content-Type, X-Base-Revision, X-Sha256"
+            .parse()
+            .expect("static"),
+    );
+    h.insert(
+        "access-control-allow-private-network",
+        "true".parse().expect("static"),
+    );
+    h.insert(header::CACHE_CONTROL, "no-store".parse().expect("static"));
+    resp
 }
 
 async fn require_token(
@@ -102,7 +187,7 @@ async fn pair(State(s): State<Shared>, Json(b): Json<PairBody>) -> Res<Json<Valu
             "Locked",
             "too many wrong codes; wait a minute",
         )),
-        Err(PairError::Wrong) => Err(ApiError::new(403, "BadCode", "the pairing code is wrong")),
+        Err(PairError::Wrong) => Err(ApiError::new(401, "BadCode", "the pairing code is wrong")),
     }
 }
 

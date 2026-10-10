@@ -225,7 +225,7 @@ async fn nothing_but_info_and_pair_is_open() {
             Some(json!({"code": "WRONG123"}).to_string().into_bytes()),
         )
         .await;
-    assert_eq!(st, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "{body}");
     let (_, snap) = r.authed("GET", "/api/v1/snapshot", None).await;
     assert_eq!(snap["protocol"], 1);
     assert_eq!(snap["deviceId"], "microduck-test");
@@ -642,4 +642,88 @@ async fn pause_and_seek_are_refused_inside_an_action_and_across_a_pose_change() 
         .await;
     assert_eq!(st, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "Busy");
+}
+
+/// A browser at another origin: the preflight is answered, with the private-network yes Chrome
+/// wants for a request to a LAN address, and errors read as Chinese sentences with the code kept.
+#[tokio::test]
+async fn a_web_page_can_call_it_and_errors_read_in_chinese() {
+    let r = rig().await;
+    let resp = r
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/control")
+                .header("origin", "http://localhost:5173")
+                .header("access-control-request-method", "POST")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,content-type",
+                )
+                .header("access-control-request-private-network", "true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    let h = resp.headers();
+    assert_eq!(h["access-control-allow-origin"], "http://localhost:5173");
+    assert_eq!(h["access-control-allow-private-network"], "true");
+    assert!(
+        h["access-control-allow-headers"]
+            .to_str()
+            .unwrap()
+            .contains("Authorization")
+    );
+    // An error carries the sentence, the code and the detail.
+    let (st, body) = r
+        .authed("POST", "/api/v1/shows/nope/play", Some(b"{}".to_vec()))
+        .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "NotFound");
+    assert!(
+        body["error"].as_str().unwrap().contains("设备中没有这首歌"),
+        "{body}"
+    );
+    // The pairing code is not case sensitive.
+    let (st, _) = r
+        .req(
+            "POST",
+            "/api/v1/pair",
+            None,
+            Some(json!({"code": "testcode"}).to_string().into_bytes()),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+}
+
+/// The pose comes from the joints, not from the policy's name: a "sit" label over standing legs is
+/// a standing robot.
+#[tokio::test]
+async fn the_pose_is_read_from_the_knee_and_not_from_the_label() {
+    let r = rig().await;
+    let mut s = state("sit", None, false);
+    s.joints = vec![0.0, 0.0, -0.4, 0.02, 0.4];
+    *r.robot.st.lock().unwrap() = Some(s.clone());
+    assert_eq!(
+        r.authed("GET", "/api/v1/capabilities", None).await.1["pose"],
+        "standing"
+    );
+    s.policy = "stand".into();
+    s.joints[3] = 1.29;
+    *r.robot.st.lock().unwrap() = Some(s.clone());
+    assert_eq!(
+        r.authed("GET", "/api/v1/capabilities", None).await.1["pose"],
+        "sitting"
+    );
+    s.joints[3] = 0.6;
+    *r.robot.st.lock().unwrap() = Some(s);
+    assert_eq!(
+        r.authed("GET", "/api/v1/capabilities", None).await.1["pose"],
+        "unknown",
+        "in between is moving"
+    );
 }

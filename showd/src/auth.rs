@@ -102,7 +102,7 @@ impl Auth {
                 return Err(PairError::Locked);
             }
         }
-        if hash(code.trim()) != hash(&self.code) {
+        if hash(&code.trim().to_uppercase()) != hash(&self.code.to_uppercase()) {
             self.failures.lock().expect("not poisoned").push_back(now);
             return Err(PairError::Wrong);
         }
