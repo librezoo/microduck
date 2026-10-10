@@ -21,6 +21,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::perf::Performance;
 
+fn default_drift_after() -> f32 {
+    0.9
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MouthStyle {
     /// Overall opening scale, 0..~1.2.
@@ -50,6 +54,13 @@ pub struct MouthStyle {
     /// percent for a step of a tone or two. 0 = off.
     #[serde(default)]
     pub interval_gain: f32,
+    /// A held vowel pulses with the beat: the period is this many beats (or half of it, chosen per
+    /// syllable), and `drift` is its depth. 0 = the old slow breathing drift.
+    #[serde(default)]
+    pub pulse_beats: f32,
+    /// A note held at least this long (seconds) gets the drift/pulse at all.
+    #[serde(default = "default_drift_after")]
+    pub drift_after: f32,
     /// How much a held note relaxes after the attack, fraction of its opening.
     pub settle: f32,
     /// Amplitude of the slow breathing drift on held notes, fraction of the opening. Keeps a
@@ -125,6 +136,8 @@ impl Style {
                 closure_gap: 0.10,
                 anticipation: 0.05,
                 interval_gain: 0.0,
+                pulse_beats: 0.0,
+                drift_after: 0.9,
                 settle: 0.14,
                 drift: 0.035,
                 breath_min: 0.35,
@@ -168,6 +181,8 @@ impl Style {
                 closure_gap: 0.07,
                 anticipation: 0.04,
                 interval_gain: 0.0,
+                pulse_beats: 0.0,
+                drift_after: 0.9,
                 settle: 0.10,
                 drift: 0.025,
                 breath_min: 0.30,
@@ -206,7 +221,7 @@ impl Style {
         Self {
             name: "lively".into(),
             mouth: MouthStyle {
-                gain: 1.0,
+                gain: 1.55,
                 pitch_gain: 0.55,
                 level_gain: 0.45,
                 climax_open: 0.55,
@@ -215,8 +230,10 @@ impl Style {
                 closure_gap: 0.06,
                 anticipation: 0.04,
                 interval_gain: 0.28,
+                pulse_beats: 1.0,
+                drift_after: 0.4,
                 settle: 0.28,
-                drift: 0.05,
+                drift: 0.22,
                 breath_min: 0.30,
                 breath_open: 0.16,
             },
@@ -259,6 +276,8 @@ impl Style {
                 closure_gap: 0.05,
                 anticipation: 0.03,
                 interval_gain: 0.0,
+                pulse_beats: 0.0,
+                drift_after: 0.9,
                 settle: 0.05,
                 drift: 0.015,
                 breath_min: 0.25,

@@ -214,6 +214,12 @@ pub fn prepare(
         return Err("head keyframes must be in time order".to_owned());
     }
     let mut style = style_by_name(&perf)?;
+    if let Some(scale) = p.mouth_scale {
+        if !(0.0..=3.0).contains(&scale) {
+            return Err(format!("a mouth scale of {scale} is outside 0..3"));
+        }
+        style = style.scaled(scale as f32, 1.0);
+    }
     if let Some(scale) = p.head_scale {
         if !(0.0..=5.0).contains(&scale) {
             return Err(format!("a head scale of {scale} is outside 0..5"));
@@ -520,6 +526,7 @@ mod tests {
             head_latency_ms: None,
             audio_latency_ms: None,
             head_scale: None,
+            mouth_scale: None,
             audio: None,
             head_keys: Vec::new(),
         }

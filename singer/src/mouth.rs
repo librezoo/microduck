@@ -88,6 +88,8 @@ enum Seg {
         drift: f32,
         period: f32,
         phase: f32,
+        ramp0: f32,
+        ramp_len: f32,
     },
     /// A closed dwell with an optional small part (the inhale cue) inside it.
     Bump {
@@ -120,11 +122,13 @@ impl Seg {
                 drift,
                 period,
                 phase,
+                ramp0,
+                ramp_len,
                 ..
             } => {
                 let tau = (t - t0).max(0.0);
                 let settled = open * (1.0 - settle * (1.0 - (-tau / 0.35).exp()));
-                let ramp = raised_cos((tau - 0.5) / 0.7);
+                let ramp = raised_cos((tau - ramp0) / ramp_len);
                 settled + drift * open * ramp * (TAU * tau / period + phase).sin()
             }
             Seg::Bump { t0, t1, peak } => peak * bump((t - t0) / (t1 - t0).max(1e-3)),
@@ -258,13 +262,25 @@ pub fn compile(
         };
         // What follows this syllable decides how it ends.
         let b = s.end;
-        let (settle, drift, period, phase) = {
+        let (settle, drift, period, phase, ramp0, ramp_len) = {
             let hold = (b - r).max(0.0);
+            // A held vowel is not a frozen one. The legacy styles drift slowly after the first half
+            // second; `pulse_beats` > 0 makes it a pulse locked to the beat (every beat, or every
+            // half beat, chosen per syllable) that starts almost at once: the jaw works along.
+            let pulse = st.pulse_beats > 0.0;
+            let beat = if perf.bpm > 0.0 { 60.0 / perf.bpm } else { 0.6 };
+            let period = if pulse {
+                st.pulse_beats * beat * if hash01(seed, i as u64, 3) > 0.5 { 1.0 } else { 0.5 }
+            } else {
+                1.9 + 1.0 * hash01(seed, i as u64, 2)
+            };
             (
                 st.settle * (hold / 0.8).min(1.0),
-                if hold > 0.9 { st.drift } else { 0.0 },
-                1.9 + 1.0 * hash01(seed, i as u64, 2),
+                if hold > st.drift_after { st.drift } else { 0.0 },
+                period,
                 hash01(seed, i as u64, 1) * TAU,
+                if pulse { 0.12 } else { 0.5 },
+                if pulse { 0.25 } else { 0.7 },
             )
         };
         let hold_val = |t: f32| {
@@ -276,6 +292,8 @@ pub fn compile(
                 drift,
                 period,
                 phase,
+                ramp0,
+                ramp_len,
             }
             .value(t)
         };
@@ -296,6 +314,8 @@ pub fn compile(
                         drift,
                         period,
                         phase,
+                        ramp0,
+                        ramp_len,
                     });
                 }
                 segs.push(Seg::Ease {
@@ -410,6 +430,8 @@ pub fn compile(
                         drift,
                         period,
                         phase,
+                        ramp0,
+                        ramp_len,
                     });
                 }
                 let vt = vt.max(s0 + 1e-3);

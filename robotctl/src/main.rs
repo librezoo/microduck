@@ -899,6 +899,7 @@ fn run_sing(
             head_latency_ms: latency[1].filter(|_| active),
             audio_latency_ms: latency[2].filter(|_| active),
             head_scale: latency[3].filter(|_| active),
+            mouth_scale: None,
             audio: None,
             head_keys: Vec::new(),
         }))?)?;

@@ -49,6 +49,10 @@ struct Args {
     /// were tried at 2.0 on the first robot, sitting: peaks of ~9° yaw, currents unchanged.)
     #[arg(long, default_value_t = 1.0)]
     head_scale: f64,
+    /// How wide the beak opens, 1.0 being the style's own (0..3). The beak never goes past fully
+    /// open, so this widens the small openings more than the big ones.
+    #[arg(long, default_value_t = 1.0)]
+    mouth_scale: f64,
     /// The performance style: `lively` (big and playful, for a sitting duck), or `ballad`, `pop`,
     /// `chant`; `auto` picks one of those three from the song.
     #[arg(long, default_value = "lively")]
@@ -101,6 +105,7 @@ async fn main() -> Result<()> {
         head_latency_ms: a.head_latency_ms,
         audio_latency_ms: a.audio_latency_ms,
         head_scale: a.head_scale,
+        mouth_scale: a.mouth_scale,
         style: (a.style != "auto").then(|| a.style.clone()),
         max_show_bytes: a.max_show_bytes,
         max_events: 2000,

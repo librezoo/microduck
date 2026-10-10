@@ -39,6 +39,8 @@ pub struct Config {
     pub audio_latency_ms: f64,
     /// Scale of every head amplitude (1.0 = the style's own).
     pub head_scale: f64,
+    /// How wide the beak opens, 1.0 being the style's own.
+    pub mouth_scale: f64,
     /// The performance style by name; `None` lets the robot choose from the song.
     pub style: Option<String>,
     pub max_show_bytes: u64,
@@ -536,6 +538,7 @@ impl App {
             head_latency_ms: Some(self.cfg.head_latency_ms),
             audio_latency_ms: Some(self.cfg.audio_latency_ms),
             head_scale: Some(head_scale.unwrap_or(self.cfg.head_scale)),
+            mouth_scale: Some(self.cfg.mouth_scale),
             audio,
             head_keys,
         };
@@ -1143,6 +1146,7 @@ pub fn stop_params() -> proto::SingParams {
         head_latency_ms: None,
         audio_latency_ms: None,
         head_scale: None,
+        mouth_scale: None,
         audio: None,
         head_keys: Vec::new(),
     }

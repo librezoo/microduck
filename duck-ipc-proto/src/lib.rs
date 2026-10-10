@@ -1818,6 +1818,7 @@ pub mod test_support {
                 head_latency_ms: Some(220.0),
                 audio_latency_ms: None,
                 head_scale: Some(1.5),
+                mouth_scale: None,
                 audio: None,
                 head_keys: Vec::new(),
             }),
@@ -5057,6 +5058,10 @@ pub struct SingParams {
     /// still bound the result, so scaling up cannot ask for more than the profile allows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head_scale: Option<f64>,
+    /// Calibration: scale how wide the beak opens (1.0 = the style's own), 0..3. The beak never
+    /// goes past fully open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouth_scale: Option<f64>,
     /// A WAV the robot plays on the show clock — the app's mixed audio. The path must lie under the
     /// robot's show library; anything else is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]

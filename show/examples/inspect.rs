@@ -10,6 +10,10 @@ fn main() {
         Some(name) => Style::by_name(&name).expect("a style").with_seed(singer::dsp::seed_of("inspect")),
         None => Style::auto(&perf),
     };
+    let style = match std::env::args().nth(3).and_then(|v| v.parse::<f32>().ok()) {
+        Some(k) => style.scaled(k, 1.0),
+        None => style,
+    };
     let mut profile = Profile::default();
     if style.name == "lively" {
         profile.head = singer::profile::HeadProfile::lively();
@@ -71,6 +75,10 @@ pub fn liveliness(show: &Show) {
         }
     }
     let secs = active.len() as f32 / r;
+    let mut sorted: Vec<f32> = active.iter().map(|&i| m[i]).collect();
+    sorted.sort_by(f32::total_cmp);
+    let q = |f: f32| sorted[((sorted.len() - 1) as f32 * f) as usize];
+    println!("beak opening while singing: p10 {:.2}  p50 {:.2}  p90 {:.2}  p99 {:.2}", q(0.1), q(0.5), q(0.9), q(0.99));
     println!(
         "beak: mean {mean:.2}, sd {sd:.2}, {:.1} swings/s over {secs:.0} s sung",
         turns as f32 / secs
