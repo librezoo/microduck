@@ -55,6 +55,7 @@ pub fn from_score(score: &Score, part: Part) -> Performance {
             level: n.level as f32,
             vowel: map_vowel(n.vowel),
             tie: false,
+            exact: false,
         })
         .collect();
     let mut opts = Options::new(

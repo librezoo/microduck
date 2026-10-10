@@ -44,6 +44,12 @@ pub struct NoteEvent {
     pub volume: f32,
     #[serde(default)]
     pub continues_previous: bool,
+    /// When the note is really audible, `[start_ms, end_ms]` on the show clock. The app states it
+    /// from the very render it mixes into the audio (performed timing, breaths inside a note,
+    /// the gap cut before a re-attack), so the beak opens and closes with what is heard instead
+    /// of with the written grid. Absent: the robot infers it from the written note.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sounding: Vec<[f64; 2]>,
 }
 
 /// Structure the app states outright. Optional: without it the robot infers sections from the
@@ -156,6 +162,20 @@ impl DuckScore {
             if !(0.0..=1.0).contains(&e.volume) {
                 p.push(Problem::new("OutOfRange", "volume outside 0..1").at(&e.event_id));
             }
+            let mut last_end = 0.0f64;
+            for [a, b] in &e.sounding {
+                if !a.is_finite() || !b.is_finite() || *a < last_end - 1e-6 || *b <= *a {
+                    p.push(
+                        Problem::new("Corrupt", "a note's sounding spans are not ordered or not positive")
+                            .at(&e.event_id),
+                    );
+                    break;
+                }
+                last_end = *b;
+            }
+            if e.sounding.len() > 64 {
+                p.push(Problem::new("TooLarge", "a note has more than 64 sounding spans").at(&e.event_id));
+            }
             if e.start_beat < prev_end - 1e-6 {
                 p.push(
                     Problem::new("Overlap", "a note starts before the previous one ends")
@@ -176,12 +196,19 @@ impl DuckScore {
 
     /// Where the last note ends, in milliseconds on the show clock.
     pub fn end_ms(&self) -> u64 {
-        let end = self
+        let written = self
             .events
             .iter()
             .map(|e| e.start_beat + e.duration_beats)
+            .fold(0.0, f64::max)
+            * 60_000.0
+            / f64::from(self.tempo_bpm);
+        let heard = self
+            .events
+            .iter()
+            .flat_map(|e| e.sounding.iter().map(|s| s[1]))
             .fold(0.0, f64::max);
-        (end * 60_000.0 / f64::from(self.tempo_bpm)).ceil() as u64
+        written.max(heard).ceil() as u64
     }
 
     /// The performance this score describes.
@@ -202,17 +229,42 @@ impl DuckScore {
         self.validate(usize::MAX)?;
         let mut sorted: Vec<&NoteEvent> = self.events.iter().collect();
         sorted.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
-        let notes: Vec<NoteIn> = sorted
-            .iter()
-            .map(|e| NoteIn {
-                start_beat: e.start_beat,
-                beats: e.duration_beats,
+        let ms_to_beats = f64::from(self.tempo_bpm) / 60_000.0;
+        let mut notes: Vec<NoteIn> = Vec::with_capacity(sorted.len());
+        for e in &sorted {
+            let note = |start_beat: f64, beats: f64, tie: bool, exact: bool| NoteIn {
+                start_beat,
+                beats,
                 midi: e.midi_note,
                 level: e.volume,
                 vowel: e.voice.into(),
-                tie: e.continues_previous,
-            })
-            .collect();
+                tie,
+                exact,
+            };
+            if e.sounding.is_empty() {
+                notes.push(note(e.start_beat, e.duration_beats, e.continues_previous, false));
+            } else {
+                // One sung note can be several audible islands (a breath inside it); each is
+                // its own stretch of beak, and the gap between them is a real closure.
+                for (k, [a, b]) in e.sounding.iter().enumerate() {
+                    notes.push(note(
+                        a * ms_to_beats,
+                        (b - a) * ms_to_beats,
+                        e.continues_previous && k == 0,
+                        true,
+                    ));
+                }
+            }
+        }
+        // Performed spans can lean on a neighbour: what is heard never overlaps.
+        notes.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
+        for i in 0..notes.len().saturating_sub(1) {
+            let next_start = notes[i + 1].start_beat;
+            if notes[i].start_beat + notes[i].beats > next_start {
+                notes[i].beats = next_start - notes[i].start_beat;
+            }
+        }
+        notes.retain(|n| n.beats > 1e-6);
         let mut opts = Options::new(name, format!("kivi.duck/1:{name}"), self.tempo_bpm);
         opts.beats_per_bar = f64::from(self.beats_per_bar);
         opts.end_rule = EndRule::Articulated;

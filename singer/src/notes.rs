@@ -24,6 +24,9 @@ pub struct NoteIn {
     /// This note continues the previous syllable's vowel (一字多音). On the *same* pitch and
     /// touching, it is simply the previous note held longer.
     pub tie: bool,
+    /// `beats` is exactly how long the note is audible — the source measured it (Kivi Studio's
+    /// render states its audible spans), so no end rule is applied.
+    pub exact: bool,
 }
 
 /// How long a note is *audible* inside its written slot.
@@ -152,6 +155,7 @@ pub fn from_notes(notes: &[NoteIn], opts: &Options) -> Performance {
             0.0
         };
         let sounding = match opts.end_rule {
+            _ if n.exact => slot,
             EndRule::Release(f) => f * slot,
             EndRule::Articulated => {
                 let adjacent = next.is_some_and(|q| q.start_beat <= end_beat(n) + 1e-6);
@@ -382,6 +386,7 @@ mod tests {
             level: 0.8,
             vowel: Vowel::Ah,
             tie,
+            exact: false,
         }
     }
 
