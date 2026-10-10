@@ -234,6 +234,13 @@ pub fn prepare(
             *field = (ms / 1000.0) as f32;
         }
     }
+    // A bigger head asks for a bigger budget too, or the soft limit just flattens it; the absolute
+    // ceiling above is still the last word.
+    if let Some(scale) = p.head_scale.filter(|s| *s > 1.0) {
+        for (b, cap) in profile.head.budget.iter_mut().zip(HEAD_ABS_MAX) {
+            *b = (*b * scale as f32).min(cap);
+        }
+    }
     let show = Show::compile(perf, style, profile).map_err(|e| e.to_string())?;
     let result = proto::SingResult {
         accepted: true,

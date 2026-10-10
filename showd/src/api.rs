@@ -141,7 +141,7 @@ async fn control(
             let id = b
                 .song_id
                 .ok_or_else(|| ApiError::new(400, "BadRequest", "play needs a songId"))?;
-            s.app.play(&id, b.revision.as_deref(), b.mute).await?;
+            s.app.play(&id, b.revision.as_deref(), b.mute, None).await?;
         }
         "pause" => {
             s.app.pause().await?;
@@ -259,6 +259,7 @@ struct PlayBody {
     #[serde(default)]
     mute: bool,
     revision: Option<String>,
+    head_scale: Option<f64>,
 }
 
 async fn play(
@@ -267,7 +268,7 @@ async fn play(
     body: Option<Json<PlayBody>>,
 ) -> Res<Json<Value>> {
     let b = body.map(|j| j.0).unwrap_or_default();
-    let view = s.app.play(&id, b.revision.as_deref(), b.mute).await?;
+    let view = s.app.play(&id, b.revision.as_deref(), b.mute, None).await?;
     Ok(Json(json!({"accepted": true, "playback": view})))
 }
 

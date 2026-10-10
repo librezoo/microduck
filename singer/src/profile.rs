@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct MouthProfile {
     /// Fastest the beak may open or close, in fraction-of-stroke per second. The full stroke is
-    /// −5°…+30°, so 5.0/s is 175°/s: a closing in 0.2 s.
+    /// −5°…+30°. **Measured once, on the first robot (sitting, no load but the beak's own):** a
+    /// square-wave command swings it 0.07…0.94 at a 0.25 s half-period and still 0.08…0.78 at
+    /// 0.125 s, at a peak 6–7 per second. These are set a little under that, and are a per-robot
+    /// number: re-measure on any other duck.
     pub max_vel: f32,
     /// Fastest the beak's speed may change, fraction/s². Decides how a fast passage degrades.
     pub max_acc: f32,

@@ -336,21 +336,38 @@ pub fn compile(
                     Some(hi)
                 };
                 // Keep the vowel held to nearly its end; if that leaves no room for a worthwhile dip,
-                // let the close begin a little earlier — the further back the longer the note can
-                // spare — and only a *short* syllable may give the whole stroke its entire period.
+                // let the close begin earlier — a mouth shuts *into* a silence, it does not wait for
+                // it, and the longer the note the more it can spare — and only a *short* syllable
+                // may give the stroke its entire period. Where there is a real silence (`closed`)
+                // the deepest dip any candidate allows wins, because a beak that stays open through
+                // a gap reads as a mouth that never closes; elsewhere the first worthwhile one does.
                 // If nothing fits, there is no dip: the two vowels join smoothly.
                 let dur = (b - r).max(0.0);
-                let mut candidates = vec![(b - reserve).max(r), (b - 0.20).max(r + 0.5 * dur)];
+                let mut candidates = vec![(b - reserve).max(r)];
+                for lead in [0.10, 0.20, 0.30] {
+                    // Never more than the second half of the note: its first half is the vowel.
+                    if lead <= 0.5 * dur {
+                        candidates.push(b - lead);
+                    }
+                }
                 if dur < 0.3 {
                     candidates.push(r);
                 }
-                let mut s_pref = candidates[0];
-                let mut fit = None;
+                let (mut s_pref, mut fit) = (candidates[0], None);
                 for c in candidates {
                     let f = solve((r_next - c).max(MIN_T));
-                    s_pref = c;
-                    fit = f;
-                    if f.is_some_and(|v| low - v >= 0.03) {
+                    let better = match (f, fit) {
+                        (Some(v), Some(best)) => closed && v < best - 0.02,
+                        (Some(_), None) => true,
+                        _ => false,
+                    };
+                    if better {
+                        s_pref = c;
+                        fit = f;
+                    }
+                    if !closed && f.is_some_and(|v| low - v >= 0.03) {
+                        s_pref = c;
+                        fit = f;
                         break;
                     }
                 }

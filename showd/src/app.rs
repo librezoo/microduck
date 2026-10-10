@@ -37,6 +37,8 @@ pub struct Config {
     pub mouth_latency_ms: f64,
     pub head_latency_ms: f64,
     pub audio_latency_ms: f64,
+    /// Scale of every head amplitude (1.0 = the style's own).
+    pub head_scale: f64,
     pub max_show_bytes: u64,
     pub max_events: usize,
     pub volume_file: std::path::PathBuf,
@@ -505,7 +507,7 @@ impl App {
             mouth_latency_ms: Some(self.cfg.mouth_latency_ms),
             head_latency_ms: Some(self.cfg.head_latency_ms),
             audio_latency_ms: Some(self.cfg.audio_latency_ms),
-            head_scale: None,
+            head_scale: Some(head_scale.unwrap_or(self.cfg.head_scale)),
             audio,
             head_keys,
         };

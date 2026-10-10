@@ -45,6 +45,10 @@ struct Args {
     head_latency_ms: f64,
     #[arg(long, default_value_t = 0.0)]
     audio_latency_ms: f64,
+    /// How big the head moves, 1.0 being each style's own amplitude. 2.0 was tried on the first
+    /// robot, sitting: peaks of ~9° yaw, currents unchanged, nothing hot.
+    #[arg(long, default_value_t = 2.0)]
+    head_scale: f64,
     #[arg(long, default_value_t = 160 << 20)]
     max_show_bytes: u64,
 }
@@ -92,6 +96,7 @@ async fn main() -> Result<()> {
         mouth_latency_ms: a.mouth_latency_ms,
         head_latency_ms: a.head_latency_ms,
         audio_latency_ms: a.audio_latency_ms,
+        head_scale: a.head_scale,
         max_show_bytes: a.max_show_bytes,
         max_events: 2000,
         volume_file: a.data.join("volume"),
