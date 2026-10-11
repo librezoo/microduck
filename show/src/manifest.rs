@@ -123,6 +123,12 @@ impl Manifest {
         if self.duration_ms == 0 {
             p.push(Problem::new("Corrupt", "durationMs is zero"));
         }
+        if self.duration_ms > crate::MAX_SHOW_MS {
+            p.push(Problem::new(
+                "TooLarge",
+                format!("durationMs beyond {} ms", crate::MAX_SHOW_MS),
+            ));
+        }
         if self.roles.len() != 1 {
             p.push(Problem::new(
                 "Incompatible",
@@ -174,6 +180,12 @@ impl Manifest {
                 p.push(Problem::new(
                     "Incompatible",
                     "audio must be 1–2 channels at 8–96 kHz",
+                ));
+            }
+            if a.start_offset_ms.unsigned_abs() > crate::MAX_SHOW_MS {
+                p.push(Problem::new(
+                    "OutOfRange",
+                    format!("audio startOffsetMs beyond ±{} ms", crate::MAX_SHOW_MS),
                 ));
             }
             if a.role == AudioRole::Backing {

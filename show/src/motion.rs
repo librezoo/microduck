@@ -93,6 +93,9 @@ fn keys_t(kind: &ActionKind) -> Vec<u64> {
 }
 
 impl MotionTrack {
+    /// Reads the track. It does **not** validate: call [`Self::validate`] before trusting any
+    /// time in it (`end_ms` and `head_keys` saturate, so they cannot overflow, but they are only
+    /// meaningful on a validated track).
     pub fn parse(bytes: &[u8]) -> Result<Self, Problems> {
         serde_json::from_slice(bytes).map_err(|e| {
             let mut p = Problems::default();
@@ -104,7 +107,7 @@ impl MotionTrack {
     pub fn end_ms(&self) -> u64 {
         self.actions
             .iter()
-            .map(|a| a.start_ms + a.duration_ms)
+            .map(|a| a.start_ms.saturating_add(a.duration_ms))
             .max()
             .unwrap_or(0)
     }
@@ -138,7 +141,23 @@ impl MotionTrack {
         }
         let mut pose = start;
         let mut prev_end = 0u64;
+        let mut times_ok = true;
         for a in &self.actions {
+            // Bound every time before any sum below touches it.
+            if a.start_ms > crate::MAX_SHOW_MS
+                || a.duration_ms > crate::MAX_SHOW_MS
+                || keys_t(&a.kind).iter().any(|t| *t > crate::MAX_SHOW_MS)
+            {
+                times_ok = false;
+                p.push(
+                    Problem::new(
+                        "OutOfRange",
+                        format!("an action's time lies beyond {} ms", crate::MAX_SHOW_MS),
+                    )
+                    .at(&a.event_id),
+                );
+                continue;
+            }
             if a.duration_ms == 0 {
                 p.push(Problem::new("Corrupt", "an action has zero duration").at(&a.event_id));
             }
@@ -186,7 +205,7 @@ impl MotionTrack {
                             ),
                         }
                         let typical = info.duration_ms;
-                        if typical > 0 && a.duration_ms + 200 < typical {
+                        if typical > 0 && a.duration_ms.saturating_add(200) < typical {
                             p.push(
                                 Problem::new(
                                     "TooShort",
@@ -319,28 +338,62 @@ impl MotionTrack {
                 }
             }
         }
+        // What the robot executes is `head_keys()`, entry and exit anchors included, and it does
+        // not slew them: judge those windows too.
+        if times_ok {
+            let keys = self.head_keys_by_action();
+            let mut flagged = std::collections::HashSet::new();
+            for w in keys.windows(2) {
+                let dt = (w[1].0.saturating_sub(w[0].0)).max(1) as f32 / 1000.0;
+                let too_fast =
+                    (0..4).any(|j| ((w[1].1[j] - w[0].1[j]) / dt).abs() > caps.head.max_vel[j]);
+                // A window whose later key is the next clip's own first key is that clip's
+                // entry; the key's owner is the clip to name.
+                if too_fast && flagged.insert(w[1].2) {
+                    p.push(
+                        Problem::new(
+                            "TooFast",
+                            "a head clip jumps from or to rest faster than the head may",
+                        )
+                        .at(&self.actions[w[1].2].event_id),
+                    );
+                }
+            }
+        }
         p.into_result()
     }
 
     /// The head keyframes of every `head` action as one absolute-time list, with a return to
     /// zero at the end of each clip so a clip never leaves the head where it stopped.
     pub fn head_keys(&self) -> Vec<(u64, [f32; 4])> {
-        let mut out: Vec<(u64, [f32; 4])> = Vec::new();
-        for a in &self.actions {
+        self.head_keys_by_action()
+            .into_iter()
+            .map(|(t, v, _)| (t, v))
+            .collect()
+    }
+
+    /// `head_keys`, each key also naming the action (index) it belongs to.
+    fn head_keys_by_action(&self) -> Vec<(u64, [f32; 4], usize)> {
+        let mut out: Vec<(u64, [f32; 4], usize)> = Vec::new();
+        for (i, a) in self.actions.iter().enumerate() {
             if let ActionKind::Head { keyframes } = &a.kind {
                 if keyframes.is_empty() {
                     continue;
                 }
-                if out.last().is_none_or(|l| l.0 + 1 < a.start_ms) {
-                    out.push((a.start_ms.saturating_sub(1), [0.0; 4]));
+                if out
+                    .last()
+                    .is_none_or(|l| l.0.saturating_add(1) < a.start_ms)
+                {
+                    out.push((a.start_ms.saturating_sub(1), [0.0; 4], i));
                 }
                 for k in keyframes {
                     out.push((
-                        a.start_ms + k.t_ms,
+                        a.start_ms.saturating_add(k.t_ms),
                         [k.neck_pitch, k.head_pitch, k.head_yaw, k.head_roll],
+                        i,
                     ));
                 }
-                out.push((a.start_ms + a.duration_ms, [0.0; 4]));
+                out.push((a.start_ms.saturating_add(a.duration_ms), [0.0; 4], i));
             }
         }
         out

@@ -42,7 +42,7 @@ impl Entry {
             .tracks
             .audio
             .as_ref()
-            .map(|a| self.dir.join(&a.file))
+            .map(|_| self.dir.join(AUDIO_FILE))
     }
 }
 
@@ -58,16 +58,57 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// SHA-256 and length of a file, read in blocks so a 44 MB WAV costs 64 KiB, not 44 MB.
+fn sha256_file(path: &Path) -> std::io::Result<(String, u64)> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut n = 0u64;
+    loop {
+        let k = f.read(&mut buf)?;
+        if k == 0 {
+            break;
+        }
+        hasher.update(&buf[..k]);
+        n += k as u64;
+    }
+    Ok((
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+        n,
+    ))
+}
+
 fn problem(code: &'static str, detail: impl Into<String>) -> Problems {
     let mut p = Problems::default();
     p.push(Problem::new(code, detail));
     p
 }
 
+/// The one on-disk name of the audio track: the store owns it, whatever the manifest's `file` says.
+pub const AUDIO_FILE: &str = "audio.wav";
+
+/// Makes every upload's scratch file its own, so two uploads of one track never share an inode.
+static PART_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Removes a scratch file on every way out (error, interrupted upload, dropped request) unless the
+/// upload was renamed into place.
+struct PartGuard(PathBuf);
+
+impl Drop for PartGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 const TRACK_FILES: [(&str, &str); 4] = [
     ("duck", "duck.score.json"),
     ("motion", "motion.json"),
-    ("audio", "audio.wav"),
+    ("audio", AUDIO_FILE),
     ("expression", "expression.patch.json"),
 ];
 
@@ -128,7 +169,11 @@ impl Store {
     }
 
     pub fn delete(&self, id: &str) -> bool {
-        is_safe_id(id) && std::fs::remove_dir_all(self.published(id)).is_ok()
+        if !is_safe_id(id) {
+            return false;
+        }
+        let _ = std::fs::remove_dir_all(self.staging(id));
+        std::fs::remove_dir_all(self.published(id)).is_ok()
     }
 
     /// Write one staged track, hashing as it goes. `chunks` are the body's pieces in order.
@@ -165,7 +210,11 @@ impl Store {
         };
         let dir = self.staging(id);
         std::fs::create_dir_all(&dir).map_err(|e| problem("Io", e.to_string()))?;
-        let part = dir.join(format!("{file}.part"));
+        let part = dir.join(format!(
+            "{file}.{}.part",
+            PART_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _guard = PartGuard(part.clone());
         let mut out = tokio::fs::File::create(&part)
             .await
             .map_err(|e| problem("Io", e.to_string()))?;
@@ -177,7 +226,6 @@ impl Store {
             let bytes = chunk.as_ref();
             total += bytes.len() as u64;
             if total > limit {
-                let _ = tokio::fs::remove_file(&part).await;
                 return Err(problem("TooLarge", format!("more than {limit} bytes")));
             }
             hasher.update(bytes);
@@ -224,7 +272,9 @@ impl Store {
         let previous = self.get(id);
         let mut p = Problems::default();
         let mut total = manifest_bytes.len() as u64;
-        // Locate every track: staged first, then the published copy by hash.
+        // Locate every track: the staged copy if it matches the manifest, else the published copy
+        // if that matches. A stale staged track left by a refused commit must not hide a published
+        // copy the manifest asks for (a revert sends nothing but the manifest).
         let mut sources: Vec<(&str, PathBuf)> = Vec::new();
         for (name, sha, bytes) in manifest.track_hashes() {
             let file = TRACK_FILES
@@ -232,42 +282,48 @@ impl Store {
                 .find(|(n, _)| *n == name)
                 .expect("known track")
                 .1;
-            let staged = staging.join(file);
-            let candidate = if staged.exists() {
-                Some(staged)
-            } else {
-                previous.as_ref().and_then(|e| {
-                    let t = e.dir.join(file);
-                    t.exists().then_some(t)
-                })
-            };
-            let Some(path) = candidate else {
-                p.push(Problem::new(
-                    "Missing",
-                    format!("track {name} was not uploaded"),
-                ));
+            let (mut seen, mut failed) = (false, false);
+            let mut chosen = None;
+            for dir in [Some(&staging), previous.as_ref().map(|e| &e.dir)]
+                .into_iter()
+                .flatten()
+            {
+                let path = dir.join(file);
+                match sha256_file(&path) {
+                    Ok((h, n)) if h == sha && n == bytes => {
+                        chosen = Some(path);
+                        break;
+                    }
+                    Ok(_) => seen = true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        failed = true;
+                        p.push(Problem::new("Io", e.to_string()));
+                    }
+                }
+            }
+            let Some(path) = chosen else {
+                if seen {
+                    p.push(Problem::new(
+                        "Corrupt",
+                        format!("track {name}: hash or size does not match the manifest"),
+                    ));
+                } else if !failed {
+                    p.push(Problem::new(
+                        "Missing",
+                        format!("track {name} was not uploaded"),
+                    ));
+                }
                 continue;
             };
-            match std::fs::read(&path) {
-                Ok(data) => {
-                    if sha256_hex(&data) != sha || data.len() as u64 != bytes {
-                        p.push(Problem::new(
-                            "Corrupt",
-                            format!("track {name}: hash or size does not match the manifest"),
-                        ));
-                        continue;
-                    }
-                    if data.len() as u64 > caps.max_show_bytes {
-                        p.push(Problem::new(
-                            "TooLarge",
-                            format!("track {name} is {} bytes", data.len()),
-                        ));
-                    }
-                    total += data.len() as u64;
-                    sources.push((name, path));
-                }
-                Err(e) => p.push(Problem::new("Io", e.to_string())),
+            if bytes > caps.max_show_bytes {
+                p.push(Problem::new(
+                    "TooLarge",
+                    format!("track {name} is {bytes} bytes"),
+                ));
             }
+            total += bytes;
+            sources.push((name, path));
         }
         p.0.is_empty().then_some(()).ok_or(p.clone())?;
         if total > caps.max_show_bytes {
@@ -334,29 +390,39 @@ impl Store {
         let new = self.root.join("shows").join(format!("{id}.new"));
         let _ = std::fs::remove_dir_all(&new);
         std::fs::create_dir_all(&new).map_err(|e| problem("Io", e.to_string()))?;
-        for (name, path) in &sources {
-            let file = TRACK_FILES
-                .iter()
-                .find(|(n, _)| n == name)
-                .expect("known")
-                .1;
-            let dest = new.join(file);
-            if std::fs::hard_link(path, &dest).is_err() {
-                std::fs::copy(path, &dest).map_err(|e| problem("Io", e.to_string()))?;
+        let assembled = (|| -> Result<Meta, Problems> {
+            for (name, path) in &sources {
+                let file = TRACK_FILES
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .expect("known")
+                    .1;
+                let dest = new.join(file);
+                if std::fs::hard_link(path, &dest).is_err() {
+                    std::fs::copy(path, &dest).map_err(|e| problem("Io", e.to_string()))?;
+                }
             }
-        }
-        std::fs::write(new.join("manifest.json"), &manifest_bytes)
+            std::fs::write(new.join("manifest.json"), &manifest_bytes)
+                .map_err(|e| problem("Io", e.to_string()))?;
+            let meta = Meta {
+                revision: sha256_hex(&manifest_bytes),
+                updated_at_ms: now_ms(),
+                total_bytes: total,
+            };
+            std::fs::write(
+                new.join("meta.json"),
+                serde_json::to_vec(&meta).expect("serialises"),
+            )
             .map_err(|e| problem("Io", e.to_string()))?;
-        let meta = Meta {
-            revision: sha256_hex(&manifest_bytes),
-            updated_at_ms: now_ms(),
-            total_bytes: total,
+            Ok(meta)
+        })();
+        let meta = match assembled {
+            Ok(m) => m,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&new);
+                return Err(e);
+            }
         };
-        std::fs::write(
-            new.join("meta.json"),
-            serde_json::to_vec(&meta).expect("serialises"),
-        )
-        .map_err(|e| problem("Io", e.to_string()))?;
         let live = self.published(id);
         let old = self.root.join("shows").join(format!("{id}.old"));
         let _ = std::fs::remove_dir_all(&old);
@@ -377,8 +443,8 @@ impl Store {
         })
     }
 
-    /// Remove half-finished uploads older than `max_age_ms` (a restart's housekeeping).
-    pub fn sweep(&self, max_age_ms: u64) {
+    /// Remove half-finished uploads older than `max_age_ms`. Safe to run while the service is up.
+    pub fn sweep_staging(&self, max_age_ms: u64) {
         let Ok(rd) = std::fs::read_dir(self.root.join("staging")) else {
             return;
         };
@@ -393,6 +459,12 @@ impl Store {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
+    }
+
+    /// A restart's housekeeping: stale staging, and swaps that were interrupted. Only at start,
+    /// when no commit can be in flight.
+    pub fn sweep(&self, max_age_ms: u64) {
+        self.sweep_staging(max_age_ms);
         // Interrupted swaps.
         if let Ok(rd) = std::fs::read_dir(self.root.join("shows")) {
             for e in rd.flatten() {

@@ -166,10 +166,46 @@ impl DuckScore {
                 format!("{} notes; this robot takes {max_events}", self.events.len()),
             ));
         }
+        // Every note can expand into one singer note per sounding span: bound the expansion too,
+        // with some room for breaths (a realistic show has far fewer spans than events).
+        let expanded: usize = self
+            .events
+            .iter()
+            .map(|e| e.sounding.len().max(1))
+            .fold(0usize, usize::saturating_add);
+        if expanded > max_events.saturating_mul(2) {
+            p.push(Problem::new(
+                "TooLarge",
+                format!(
+                    "{expanded} sounding notes; this robot takes {}",
+                    max_events.saturating_mul(2)
+                ),
+            ));
+        }
+        // Beats to milliseconds, for the length bound; a bad tempo is reported above.
+        let ms_per_beat = 60_000.0 / f64::from(self.tempo_bpm).clamp(20.0, 300.0);
+        let max_ms = crate::MAX_SHOW_MS as f64;
         let mut sorted: Vec<&NoteEvent> = self.events.iter().collect();
         sorted.sort_by(|a, b| a.start_beat.total_cmp(&b.start_beat));
         let mut prev_end = 0.0f64;
         for e in &sorted {
+            if (e.start_beat.is_finite()
+                && e.duration_beats.is_finite()
+                && (e.start_beat + e.duration_beats) * ms_per_beat > max_ms)
+                || e.sounding.iter().any(|[a, b]| a.max(*b) > max_ms)
+            {
+                p.push(
+                    Problem::new("OutOfRange", "a note lies beyond the longest show allowed")
+                        .at(&e.event_id),
+                );
+                continue;
+            }
+            if e.start_beat.is_infinite() || e.duration_beats.is_infinite() {
+                p.push(
+                    Problem::new("Corrupt", "a note has a bad start or duration").at(&e.event_id),
+                );
+                continue;
+            }
             if !e.start_beat.is_finite()
                 || e.start_beat < 0.0
                 || e.duration_beats.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
@@ -188,15 +224,21 @@ impl DuckScore {
             for [a, b] in &e.sounding {
                 if !a.is_finite() || !b.is_finite() || *a < last_end - 1e-6 || *b <= *a {
                     p.push(
-                        Problem::new("Corrupt", "a note's sounding spans are not ordered or not positive")
-                            .at(&e.event_id),
+                        Problem::new(
+                            "Corrupt",
+                            "a note's sounding spans are not ordered or not positive",
+                        )
+                        .at(&e.event_id),
                     );
                     break;
                 }
                 last_end = *b;
             }
             if e.sounding.len() > 64 {
-                p.push(Problem::new("TooLarge", "a note has more than 64 sounding spans").at(&e.event_id));
+                p.push(
+                    Problem::new("TooLarge", "a note has more than 64 sounding spans")
+                        .at(&e.event_id),
+                );
             }
             if e.sounding.is_empty() && e.start_beat < prev_end - 1e-6 {
                 p.push(
@@ -211,6 +253,14 @@ impl DuckScore {
                 || s.start_beat < 0.0
             {
                 p.push(Problem::new("Corrupt", "a section has a bad range"));
+            } else if s.end_beat * ms_per_beat > max_ms {
+                p.push(Problem::new(
+                    "OutOfRange",
+                    "a section lies beyond the longest show allowed",
+                ));
+            }
+            if !(0.0..=1.0).contains(&s.intensity) {
+                p.push(Problem::new("OutOfRange", "section intensity outside 0..1"));
             }
         }
         p.into_result()
@@ -265,7 +315,12 @@ impl DuckScore {
                 onset: e.onset.map(Onset::from),
             };
             if e.sounding.is_empty() {
-                notes.push(note(e.start_beat, e.duration_beats, e.continues_previous, false));
+                notes.push(note(
+                    e.start_beat,
+                    e.duration_beats,
+                    e.continues_previous,
+                    false,
+                ));
             } else {
                 // One sung note can be several audible islands (a breath inside it); each is
                 // its own stretch of beak, and the gap between them is a real closure.
@@ -288,6 +343,15 @@ impl DuckScore {
             }
         }
         notes.retain(|n| n.beats > 1e-6);
+        // A tie joins two sounds that touch. Across an audible gap the beak has to close (the
+        // same 50 ms the singer calls a gap), whatever the next note is marked.
+        let tie_gap_beats = 0.05 * f64::from(self.tempo_bpm) / 60.0;
+        for i in 1..notes.len() {
+            let prev_end = notes[i - 1].start_beat + notes[i - 1].beats;
+            if notes[i].tie && notes[i].start_beat - prev_end >= tie_gap_beats {
+                notes[i].tie = false;
+            }
+        }
         let mut opts = Options::new(name, format!("kivi.duck/1:{name}"), self.tempo_bpm);
         opts.beats_per_bar = f64::from(self.beats_per_bar);
         opts.end_rule = EndRule::Articulated;

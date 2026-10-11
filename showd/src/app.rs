@@ -227,6 +227,9 @@ pub struct App {
     sequence: AtomicU64,
     version: AtomicU64,
     last_key: Mutex<String>,
+    /// Serialises the things that start, replace or remove a show's files: play, commit, delete.
+    /// Never taken by stop, pause, resume or seek, so those stay prompt.
+    gate: tokio::sync::Mutex<()>,
 }
 
 /// Left knee angle, radians, above which the robot is sitting and below which it is standing.
@@ -288,6 +291,7 @@ impl App {
             sequence: AtomicU64::new(1),
             version: AtomicU64::new(1),
             last_key: Mutex::new(String::new()),
+            gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -367,6 +371,11 @@ impl App {
     }
 
     pub async fn commit(&self, id: &str) -> Result<Song, ApiError> {
+        // The robot's capabilities first (a slow RPC), then the gate: the check that the show is
+        // not playing and the swap of its files must not have a play slip in between.
+        let caps = self.capabilities().await;
+        let pose = caps.pose;
+        let _gate = self.gate.lock().await;
         // Not while it is playing: the files under a playing show must not change.
         self.refresh();
         if self.is_current(id) {
@@ -376,11 +385,11 @@ impl App {
                 "this show is playing; stop it before updating it",
             ));
         }
-        let caps = self.capabilities().await;
-        let pose = caps.pose;
-        let entry = self
-            .store
-            .commit(id, &caps, pose)
+        let store = self.store.clone();
+        let sid = id.to_owned();
+        let entry = tokio::task::spawn_blocking(move || store.commit(&sid, &caps, pose))
+            .await
+            .map_err(|e| ApiError::new(500, "Io", e.to_string()))?
             .map_err(ApiError::from_problems)?;
         self.version.fetch_add(1, Ordering::Relaxed);
         Ok(Self::song_of(&entry))
@@ -395,7 +404,8 @@ impl App {
             .is_some_and(|c| c.show_id == id)
     }
 
-    pub fn delete(&self, id: &str) -> Result<(), ApiError> {
+    pub async fn delete(&self, id: &str) -> Result<(), ApiError> {
+        let _gate = self.gate.lock().await;
         self.refresh();
         if self.is_current(id) {
             return Err(ApiError::new(
@@ -420,6 +430,9 @@ impl App {
         mute: bool,
         head_scale: Option<f64>,
     ) -> Result<PlaybackView, ApiError> {
+        // Held to the end: a second play (a double tap, an HTTP retry) waits here and then finds
+        // the first one running, and a commit or delete cannot swap the files being read.
+        let _gate = self.gate.lock().await;
         let entry = self
             .store
             .get(id)
@@ -570,6 +583,9 @@ impl App {
         {
             let mut inner = self.inner.lock().expect("not poisoned");
             inner.last = None;
+            if let Some(old) = inner.cur.take() {
+                old.cancel.store(true, Ordering::Relaxed);
+            }
             inner.cur = Some(Current {
                 show_id: id.to_owned(),
                 revision: entry.meta.revision.clone(),
@@ -897,6 +913,7 @@ impl App {
             Hold,
         }
         let mut next = 0usize;
+        let mut last_t: Option<f64> = None;
         let mut running: Option<(usize, Running)> = None;
         let mut tick = tokio::time::interval(Duration::from_millis(50));
         loop {
@@ -923,6 +940,13 @@ impl App {
                 continue;
             };
             let t = sing.t_s;
+            // A jump in the song clock far bigger than a tick is a seek (or a stalled stream):
+            // steps whose window is over are skipped, steps ahead of `t` are armed again, rather
+            // than firing late or never. Not while one is running: seeks are refused inside one.
+            if last_t.is_some_and(|l| (t - l).abs() > 0.5) && running.is_none() {
+                next = tl.steps.partition_point(|s| s.end_s <= t);
+            }
+            last_t = Some(t);
             if sing.paused {
                 continue;
             }

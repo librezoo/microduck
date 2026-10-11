@@ -44,6 +44,10 @@ pub const PRE_ROLL_S: f32 = 1.5;
 /// two layers legitimately add.
 pub const HEAD_ABS_MAX: [f32; 4] = [0.20, 0.30, 0.85, 0.25];
 
+/// The fastest a head clip may move, rad/s: the same numbers `show::caps::default_limits` validates
+/// a motion track against, which robotd does not depend on. Keep the two in step.
+const HEAD_CLIP_MAX_VEL: [f32; 4] = [0.8, 1.2, 2.0, 1.2];
+
 /// The largest WAV the robot will decode into memory.
 const MAX_AUDIO_BYTES: u64 = 160 << 20;
 
@@ -130,14 +134,29 @@ fn load_audio(path: &str, root: &Path, offset_ms: i64) -> Result<AudioJob, Strin
     })
 }
 
+/// What the robot knows at the door when a request arrives.
+#[derive(Clone, Copy)]
+pub struct Door<'a> {
+    /// `[chorale] accept` in robotd.toml.
+    pub opted_in: bool,
+    pub has_voice: bool,
+    /// The chorale or the theremin has the beak (showd matches "has the beak" for its Busy).
+    pub beak_busy: bool,
+    pub show_root: &'a Path,
+}
+
 /// Validate and compile a request. Everything that can be refused is refused here, at the door,
 /// with the reason — the control loop is handed only something it can run.
 pub fn prepare(
     p: &proto::SingParams,
-    opted_in: bool,
-    has_voice: bool,
-    show_root: &Path,
+    door: &Door<'_>,
 ) -> Result<(Command, proto::SingResult), String> {
+    let Door {
+        opted_in,
+        has_voice,
+        beak_busy,
+        show_root,
+    } = *door;
     if !p.active {
         return Ok((Command::Stop, proto::SingResult::default()));
     }
@@ -147,6 +166,9 @@ pub fn prepare(
              performance moves the beak and the head"
                 .to_owned(),
         );
+    }
+    if beak_busy {
+        return Err("the chorale or the theremin has the beak; stop it first".to_owned());
     }
     let style_by_name = |perf: &Performance| -> Result<Style, String> {
         match p.style.as_deref() {
@@ -299,6 +321,11 @@ pub struct Performer {
     file_stop_sent: bool,
     file_paused_sent: bool,
     pending_seek: bool,
+    // The head clip's own output, slewed across transitions (pause, resume, seek, stop): it is
+    // added after the Player, so the Player's never-jump guarantee does not cover it.
+    extra_out: [f32; 4],
+    extra_ramp: bool,
+    extra_playing: bool,
 }
 
 impl Performer {
@@ -320,6 +347,9 @@ impl Performer {
             file_stop_sent: false,
             file_paused_sent: false,
             pending_seek: false,
+            extra_out: [0.0; 4],
+            extra_ramp: false,
+            extra_playing: false,
         }
     }
 
@@ -359,6 +389,7 @@ impl Performer {
                     self.base = now - std::time::Duration::from_secs_f64(target);
                 }
                 self.pending_seek = true;
+                self.extra_ramp = true;
             }
             Control::Volume(_) => {}
         }
@@ -471,18 +502,53 @@ impl Performer {
         let mut frame = self.player.tick(dt, clock);
         // A head clip is not the singer's to slew: it was validated at the door and it is added
         // on top, bounded by the absolute ceiling — and only while the show is actually playing.
-        if matches!(clock, Clock::Playing(_)) {
-            let extra = self.extra_head(t);
-            for j in 0..4 {
-                frame.head[j] = (frame.head[j] + extra[j]).clamp(-HEAD_ABS_MAX[j], HEAD_ABS_MAX[j]);
-            }
-        }
+        // Steady playing adds it as is; only the transitions (the clock stopping or starting, a
+        // seek, the end) are rate-limited by the head's own velocity limits so the clip never
+        // steps a joint.
+        let playing = matches!(clock, Clock::Playing(_));
         let past_end = t > f64::from(self.player.show().duration());
-        if self.player.phase() == Phase::Idle && (self.stopping || past_end) {
+        let finished = self.player.phase() == Phase::Idle && (self.stopping || past_end);
+        if playing != self.extra_playing {
+            self.extra_playing = playing;
+            self.extra_ramp = true;
+        }
+        let want = if playing && !finished {
+            self.extra_head(t)
+        } else {
+            [0.0; 4]
+        };
+        if finished {
+            self.extra_ramp = true;
+        }
+        if self.extra_ramp {
+            let vmax = self.player.show().profile.head.max_vel;
+            for j in 0..4 {
+                // At least as fast as the door lets a clip move (showd validates against
+                // `HEAD_CLIP_MAX_VEL`), or a clip that validated could outrun its own ramp.
+                self.extra_out[j] = singer::dsp::rate_limit(
+                    self.extra_out[j],
+                    want[j],
+                    dt,
+                    vmax[j].max(HEAD_CLIP_MAX_VEL[j]),
+                );
+            }
+            if self.extra_out == want {
+                self.extra_ramp = false;
+            }
+        } else {
+            self.extra_out = want;
+        }
+        for j in 0..4 {
+            frame.head[j] =
+                (frame.head[j] + self.extra_out[j]).clamp(-HEAD_ABS_MAX[j], HEAD_ABS_MAX[j]);
+        }
+        if finished && self.extra_out == [0.0; 4] {
             return None;
         }
         let show = self.player.show();
         let phase = match self.player.phase() {
+            // The head clip is still ramping back to rest after the show ended or was stopped.
+            _ if finished => "settling",
             Phase::Releasing => "settling",
             _ if self.held.is_some() => "paused",
             _ if t < self.audio_start_s => "lead-in",
@@ -514,6 +580,29 @@ mod tests {
         std::env::temp_dir()
     }
 
+    fn door(opted_in: bool, has_voice: bool) -> Door<'static> {
+        Door {
+            opted_in,
+            has_voice,
+            beak_busy: false,
+            show_root: Path::new("/tmp"),
+        }
+    }
+
+    #[test]
+    fn a_busy_beak_is_refused_with_the_words_showd_matches() {
+        let busy = Door {
+            beak_busy: true,
+            ..door(true, true)
+        };
+        let e = prepare(&params(Some(2)), &busy).err().expect("refused");
+        assert!(e.contains("has the beak"), "{e}");
+        // Stopping is never refused.
+        let mut p = params(Some(2));
+        p.active = false;
+        assert!(prepare(&p, &busy).is_ok());
+    }
+
     fn params(piece: Option<u8>) -> proto::SingParams {
         proto::SingParams {
             active: true,
@@ -533,7 +622,7 @@ mod tests {
     }
 
     fn start(p: &proto::SingParams) -> Box<Job> {
-        match prepare(p, true, true, &root()).expect("accepted").0 {
+        match prepare(p, &door(true, true)).expect("accepted").0 {
             Command::Start(job) => job,
             _ => panic!("a start"),
         }
@@ -541,7 +630,7 @@ mod tests {
 
     #[test]
     fn a_robot_that_has_not_opted_in_refuses_and_says_why() {
-        let err = prepare(&params(Some(2)), false, true, &root())
+        let err = prepare(&params(Some(2)), &door(false, true))
             .err()
             .expect("refused");
         assert!(err.contains("[chorale] accept"), "{err}");
@@ -552,21 +641,21 @@ mod tests {
         let mut p = params(None);
         p.active = false;
         assert!(matches!(
-            prepare(&p, false, false, &root()),
+            prepare(&p, &door(false, false)),
             Ok((Command::Stop, _))
         ));
     }
 
     #[test]
     fn bad_requests_are_refused_at_the_door_with_what_the_robot_has() {
-        let e = prepare(&params(Some(99)), true, true, &root())
+        let e = prepare(&params(Some(99)), &door(true, true))
             .err()
             .expect("refused");
         assert!(e.contains("duck-strut"), "names the catalogue: {e}");
         let mut p = params(Some(2));
         p.part = Some("kazoo".into());
         assert!(
-            prepare(&p, true, true, &root())
+            prepare(&p, &door(true, true))
                 .err()
                 .expect("refused")
                 .contains("soprano")
@@ -574,14 +663,14 @@ mod tests {
         let mut p = params(Some(2));
         p.style = Some("opera".into());
         assert!(
-            prepare(&p, true, true, &root())
+            prepare(&p, &door(true, true))
                 .err()
                 .expect("refused")
                 .contains("ballad")
         );
         let mut p = params(None);
         p.performance = Some("{\"nope\": 1}".into());
-        assert!(prepare(&p, true, true, &root()).is_err());
+        assert!(prepare(&p, &door(true, true)).is_err());
     }
 
     #[test]
@@ -589,20 +678,20 @@ mod tests {
         let mut p = params(Some(2));
         p.mute = false;
         assert!(
-            prepare(&p, true, false, &root())
+            prepare(&p, &door(true, false))
                 .err()
                 .expect("refused")
                 .contains("mute")
         );
         p.mute = true;
-        assert!(prepare(&p, true, false, &root()).is_ok());
+        assert!(prepare(&p, &door(true, false)).is_ok());
     }
 
     /// The whole path at the loop's rate: lead-in, performance, stop — the beak and head stay
     /// inside their limits at every tick and end at rest.
     #[test]
     fn a_performance_runs_at_fifty_hertz_and_ends_at_rest() {
-        let (cmd, result) = prepare(&params(Some(2)), true, true, &root()).expect("accepted");
+        let (cmd, result) = prepare(&params(Some(2)), &door(true, true)).expect("accepted");
         assert!(result.accepted && result.duration_s > 30.0, "{result:?}");
         let Command::Start(job) = cmd else {
             panic!("a start")
@@ -733,11 +822,73 @@ mod tests {
         assert!(yaw > 0.30 && yaw <= HEAD_ABS_MAX[2] + 1e-6, "{yaw}");
         p.head_keys[1].offsets[2] = 0.9;
         assert!(
-            prepare(&p, true, true, &root())
+            prepare(&p, &door(true, true))
                 .err()
                 .expect("refused")
                 .contains("beyond")
         );
+    }
+
+    #[test]
+    fn a_head_clip_does_not_step_on_pause_seek_resume_or_stop() {
+        let mut p = params(Some(2));
+        p.head_keys = vec![
+            proto::SingHeadKey {
+                t_ms: 1000,
+                offsets: [0.0, 0.0, 0.0, 0.0],
+            },
+            proto::SingHeadKey {
+                t_ms: 3000,
+                offsets: [0.0, 0.0, 0.45, 0.0],
+            },
+            proto::SingHeadKey {
+                t_ms: 30000,
+                offsets: [0.0, 0.0, -0.45, 0.0],
+            },
+        ];
+        let mut perf = Performer::new(start(&p), Instant::now());
+        let t0 = Instant::now();
+        perf.base = t0;
+        let limits = perf.player.show().profile;
+        let mut now = t0;
+        let mut last: Option<Frame> = None;
+        let mut step = |perf: &mut Performer, now: &mut Instant, ticks: u32| {
+            for _ in 0..ticks {
+                *now += Duration::from_millis(20);
+                let Some((f, _)) = perf.tick(*now, 0.02) else {
+                    return false;
+                };
+                if let Some(l) = last {
+                    for j in 0..4 {
+                        // The Player and the clip may each slew at the limit at once, so twice
+                        // it; a step (measured 20 rad/s) is far beyond.
+                        let v = ((f.head[j] - l.head[j]) / 0.02).abs();
+                        assert!(
+                            v <= limits.head.max_vel[j] * 2.1 + 1e-3,
+                            "joint {j}: {v} rad/s"
+                        );
+                    }
+                }
+                last = Some(f);
+            }
+            true
+        };
+        step(&mut perf, &mut now, 200); // 4 s: the clip is at +0.45 and heading to -0.45
+        perf.control(Control::Pause, now).unwrap();
+        step(&mut perf, &mut now, 100);
+        perf.control(Control::Seek(20.0), now).unwrap();
+        step(&mut perf, &mut now, 100);
+        perf.control(Control::Resume, now).unwrap();
+        step(&mut perf, &mut now, 100);
+        perf.control(Control::Seek(2.0), now).unwrap();
+        step(&mut perf, &mut now, 100);
+        perf.stop();
+        let mut ticks = 0;
+        while step(&mut perf, &mut now, 1) {
+            ticks += 1;
+            assert!(ticks < 1000, "never settled");
+        }
+        assert!(last.unwrap().head[2].abs() < 0.05);
     }
 
     #[test]
@@ -749,7 +900,7 @@ mod tests {
             path: "/etc/passwd".into(),
             start_offset_ms: 0,
         });
-        let err = prepare(&p, true, true, &root()).err().expect("refused");
+        let err = prepare(&p, &door(true, true)).err().expect("refused");
         assert!(
             err.contains("outside the show library") || err.contains("audio"),
             "{err}"
@@ -780,7 +931,16 @@ mod tests {
             path: wav.to_string_lossy().into_owned(),
             start_offset_ms: 500,
         });
-        let job = match prepare(&p, true, true, &dir).expect("accepted").0 {
+        let job = match prepare(
+            &p,
+            &Door {
+                show_root: &dir,
+                ..door(true, true)
+            },
+        )
+        .expect("accepted")
+        .0
+        {
             Command::Start(j) => j,
             _ => panic!(),
         };

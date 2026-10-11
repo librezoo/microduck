@@ -370,3 +370,35 @@ idle ─ play ─→ lead-in(1.5 s: 嘴闭、头吸气) ─→ playing ─ 结�
 - `studioAdapter.live.test.ts`、`showAdapter.live.test.ts`：对着一个运行中的 `showd` 跑，用环境变量 `SHOWD_ADDRESS`、`SHOWD_CODE` 指定。注意要加 `--no-file-parallelism`，两个测试同时放会抢同一只鸭子。
 
 **尚未与 Studio 的真实界面联调**（没有跑它的 UI）；已验证的是它的适配器代码。
+
+## 10. 真机联调后补上的机制（2026-10-11）
+
+这一节只写"代码里有、上面没写"的东西；每条的权威位置在括号里。**凡标"未验证"的，没有在真机上确认。**
+
+**10.1 `kivi.duck/1` 的两个可选字段（`show/src/duck.rs`；向后兼容，缺省则按乐谱推断）**
+
+- `sounding: [[起ms, 止ms], …]`：这个音符真正有声音的时段（歌曲时间）。App 用和它自己合成歌声**同一套规则**算出（导入识别到的演唱时间、音符内部的换气、原版音色下相邻手写音符之间切出的静音；`apps/studio/src/articulation.ts`、`device/audibleSpans.ts`），机器侧据此生成**精确**的音符（不再套 `Articulated`/`Release` 的推断），嘴就在真正没声的地方闭上。校验：有序、为正、至多 64 段；`end_ms()` 取最晚的有声时刻。
+- `onset: "closure" | "soft" | "none"`：歌词拼音声母对嘴的影响（唇音 b/p/m/f 闭嘴，其他辅音收窄，元音或 y/w 开头几乎不动）。
+- 一个音符里的转音/滑音由 App 切成几段、后一段是前一段的延续（`continuesPrevious`），每段至少 150 ms；机器侧另有规则：隔着 ≥ 50 ms 静音的"连音"不算连音，嘴要闭上（`to_performance_for`）。
+- 限幅：时长、起点、音符/段落/区间的时间都不超过 2 小时（`show::MAX_SHOW_MS`），展开后的音符数不超过 `2 × max_events`；否则 `TooLarge` / `OutOfRange`。
+
+**10.2 `lively` 风格与按歌曲自适应的嘴（`singer/src/style.rs`、`mouth.rs`、`head.rs`；showd 默认用它）**
+
+- 头：比 `ballad/pop/chant` 大数倍（左右转 p95 ≈ 0.42 rad），新增 `follow`（头跟旋律抬低）和 `swing`（随小节左右摇，每小节大小方向不同）两层，预算见 `HeadProfile::lively()`；`robotd` 的 `HEAD_ABS_MAX` 仍是最终上限。
+- 嘴：`auto_range`——每首歌编好谱后，把这首歌里宽的那 10%（按时长加权）拉到约 1.0、窄宽之间留出足够差距（`fit_to_song`），所以 ah 为主的歌不会一直顶满，oo 为主的歌也不会显得闭着；`interval_gain`（音程上行张大、下行收窄）；长音上按拍子的下巴起伏（`pulse_beats`）；相邻音节之间的小幅收窄，允许在下一个元音开始后才完全张开（`LEGATO_LATE`），唇音辅音收得更深；太短的接续片段沿用前一个的开口。
+- 旋钮：`SingParams.mouth_scale`（0..3）、`head_scale`（0..5）、`style`；`showd` 的 `--mouth-scale`、`--head-scale`、`--style`（默认 `lively`，`auto` 表示按歌曲在旧三种里选）。嘴的 1.0 就是关节 30° 的机械上限。
+- **未验证**：只在一首歌（《学不会》）上由人看过，《江南》只看了前 75 秒。
+
+**10.3 协议与服务端的两个坑**
+
+- `robotd` 以前拒绝超过 64 KiB 的请求行，且拒绝的应答没有 id；一首 4 分钟的歌 `robot.sing` 的演奏描述就有 134 KB，于是 `showd` 一直等到 10 秒超时报"robotd did not answer"。现在上限是 2 MiB，`showd` 也把无 id 的拒绝当作自己的应答。
+- 嘴被合唱或拾音琴占着时，`robot.sing` 在接口入口就拒绝（带"has the beak"，showd 据此回 Busy），不再先答应再悄悄丢掉。
+
+**10.4 混音与音频（App 侧；机器上播的是 App 合成的那一份，逐字节一致，哈希可核对）**
+
+- 六元音采样音色在同样的混音增益下比官方鸭声低约 6.6 dB（活跃段 RMS −21.4 对 −14.8 dBFS），而增益是按官方音色调的，叠到伴奏上几乎听不见；现在对六元音音色放大 2.1 倍（`voiceBoost`）。
+- 机器的喇叭、`aplay` 的 80 ms 缓冲与实时写入没有问题（30 秒内 0 次欠载、缓冲余量 ≥ 60 ms、控制程序约占一个核的 19%）。
+
+**10.5 真机上量到的动作跟随**（采样 25 Hz，对很快的动作有低估）：嘴比指令晚约 157 ms，实际幅度约为指令的 83%；头的俯仰晚约 196 ms、只到约 69%；偏航约 92%。舵机跟不上的快速开合会显得"不干脆"——这是后面调嘴的物理上限。
+
+**10.6 让机器人坐下的顺序**：更新 `robotd` 后它是松力矩的；`robotctl robot enable` 会让它**站起来**（约 6 秒，等到膝关节显示站稳），然后**只发一次** `robot do sit_toggle`，看 `journalctl -u robotd | grep "sit toggle"` 的方向，耐心等最多 30 秒；不要因为没动就补发（补发会让它又站起来）。个别次开机第一次 `sit` 不动，则下一次切换记 `stand`（无动作），再下一次才是 `sit`。

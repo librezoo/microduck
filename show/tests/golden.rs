@@ -189,3 +189,94 @@ fn overlapping_notes_are_refused_with_the_note() {
         "{err}"
     );
 }
+
+// ---- bounds on absurd packages ----
+
+#[test]
+fn a_far_note_a_huge_duration_and_an_overflowing_start_are_refused() {
+    let far = br#"{"schema":"kivi.duck/1","tempoBpm":120,"events":[{"eventId":"a","startBeat":20000000,"durationBeats":1,"voice":"ah","midiNote":60,"volume":0.8}]}"#;
+    assert!(DuckScore::parse(far).unwrap_err().has("OutOfRange"));
+    let span = br#"{"schema":"kivi.duck/1","tempoBpm":120,"events":[{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":60,"volume":0.8,"sounding":[[0,9e9]]}]}"#;
+    assert!(DuckScore::parse(span).unwrap_err().has("OutOfRange"));
+
+    let mut m = manifest(b"audio");
+    m.duration_ms = 4_000_000_000_000;
+    assert!(m.validate().unwrap_err().has("TooLarge"));
+    let mut m = manifest(b"audio");
+    m.tracks.audio.as_mut().unwrap().start_offset_ms = i64::MIN;
+    assert!(m.validate().unwrap_err().has("OutOfRange"));
+
+    let motion = br#"{"schema":"kivi.motion/1","actions":[{"eventId":"a","startMs":18446744073709551610,"durationMs":100,"type":"hold","pose":"standing"},{"eventId":"b","startMs":0,"durationMs":4000000000000,"type":"hold","pose":"standing"}]}"#;
+    let t = MotionTrack::parse(motion).unwrap();
+    assert_eq!(t.end_ms(), u64::MAX);
+    let e = t.validate(&caps(), Pose::Standing).unwrap_err();
+    assert!(e.has("OutOfRange"));
+}
+
+#[test]
+fn too_many_sounding_spans_are_refused_but_a_long_busy_song_passes() {
+    let one = |i: usize| {
+        let off = i as f64 * 1000.0;
+        let sp: Vec<String> = (0..64)
+            .map(|k| {
+                format!(
+                    "[{},{}]",
+                    off + k as f64 * 10.0,
+                    off + k as f64 * 10.0 + 5.0
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"eventId":"e{i}","startBeat":{i},"durationBeats":1,"voice":"ah","midiNote":60,"volume":0.8,"sounding":[{}]}}"#,
+            sp.join(",")
+        )
+    };
+    let events: Vec<String> = (0..30).map(one).collect();
+    let json = format!(
+        r#"{{"schema":"kivi.duck/1","tempoBpm":120,"events":[{}]}}"#,
+        events.join(",")
+    );
+    let s: DuckScore = serde_json::from_str(&json).unwrap();
+    assert!(s.validate(2000).is_ok());
+    assert!(s.validate(50).unwrap_err().has("TooLarge"));
+
+    // 20 minutes, 5000 notes, at 120 bpm (2 beats per second): 2400 beats.
+    let notes: Vec<String> = (0..5000)
+        .map(|i| {
+            format!(
+                r#"{{"eventId":"n{i}","startBeat":{},"durationBeats":0.4,"voice":"ah","midiNote":60,"volume":0.8}}"#,
+                i as f64 * 0.48
+            )
+        })
+        .collect();
+    let json = format!(
+        r#"{{"schema":"kivi.duck/1","tempoBpm":120,"events":[{}]}}"#,
+        notes.join(",")
+    );
+    let s = DuckScore::parse(json.as_bytes()).unwrap();
+    s.validate(5000).unwrap();
+}
+
+#[test]
+fn section_intensity_is_bounded() {
+    let j = br#"{"schema":"kivi.duck/1","tempoBpm":120,"events":[{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":60,"volume":0.8}],"sections":[{"kind":"verse","startBeat":0,"endBeat":4,"intensity":50}]}"#;
+    assert!(DuckScore::parse(j).unwrap_err().has("OutOfRange"));
+}
+
+#[test]
+fn a_head_clip_may_not_jump_in_or_out_of_rest() {
+    // Starts and ends at 0.8 rad of yaw: 0.8 rad in 1 ms in and 0 ms out.
+    let bad = br#"{"schema":"kivi.motion/1","actions":[{"eventId":"h","startMs":1000,"durationMs":2000,"type":"head","keyframes":[{"tMs":0,"neckPitch":0,"headPitch":0,"headYaw":0.8,"headRoll":0},{"tMs":2000,"neckPitch":0,"headPitch":0,"headYaw":0.8,"headRoll":0}]}]}"#;
+    let e = MotionTrack::parse(bad)
+        .unwrap()
+        .validate(&caps(), Pose::Standing)
+        .unwrap_err();
+    assert!(e.has("TooFast"));
+    assert_eq!(e.0[0].event_id.as_deref(), Some("h"));
+    // An envelope that starts and ends at 0 and moves gently is fine.
+    let ok = br#"{"schema":"kivi.motion/1","actions":[{"eventId":"h","startMs":1000,"durationMs":2000,"type":"head","keyframes":[{"tMs":0,"neckPitch":0,"headPitch":0,"headYaw":0,"headRoll":0},{"tMs":1000,"neckPitch":0,"headPitch":0,"headYaw":0.3,"headRoll":0},{"tMs":2000,"neckPitch":0,"headPitch":0,"headYaw":0,"headRoll":0}]}]}"#;
+    MotionTrack::parse(ok)
+        .unwrap()
+        .validate(&caps(), Pose::Standing)
+        .unwrap();
+}

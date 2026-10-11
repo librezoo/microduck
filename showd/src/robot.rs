@@ -156,7 +156,8 @@ impl RobotLink for UnixRobot {
                 };
                 // robotd answers a request it cannot even read (too large, malformed) with an error
                 // that has no id; on this one-request connection that error is ours.
-                let ours = resp.id == Some(proto::Id::Number(2)) || (resp.id.is_none() && resp.error.is_some());
+                let ours = resp.id == Some(proto::Id::Number(2))
+                    || (resp.id.is_none() && resp.error.is_some());
                 if !ours {
                     continue;
                 }

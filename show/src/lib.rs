@@ -28,6 +28,11 @@ pub use motion::{Action, ActionKind, BodyKey, HeadKey, MotionTrack, WalkKey};
 /// The tracks a package may carry.
 pub const TRACK_NAMES: [&str; 4] = ["duck", "motion", "audio", "expression"];
 
+/// The longest show, and the largest time offset, a package may state (two hours). Far beyond any
+/// real song; it exists so a tiny package cannot make the robot allocate for a show that lasts
+/// months, nor overflow a millisecond sum.
+pub const MAX_SHOW_MS: u64 = 2 * 3_600_000;
+
 /// Lower-case hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};

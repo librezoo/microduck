@@ -17,14 +17,23 @@ fn a_breath_inside_a_note_becomes_a_real_closure() {
     );
     let perf = s.to_performance("t").unwrap();
     assert_eq!(perf.syllables.len(), 2);
-    assert!((perf.syllables[0].end - 0.4).abs() < 1e-3, "{:?}", perf.syllables[0]);
+    assert!(
+        (perf.syllables[0].end - 0.4).abs() < 1e-3,
+        "{:?}",
+        perf.syllables[0]
+    );
     assert!((perf.syllables[1].start - 0.7).abs() < 1e-3);
-    assert!((perf.syllables[1].end - 1.0).abs() < 1e-3, "no end rule on a stated span");
+    assert!(
+        (perf.syllables[1].end - 1.0).abs() < 1e-3,
+        "no end rule on a stated span"
+    );
 }
 
 #[test]
 fn without_sounding_the_written_note_is_used_as_before() {
-    let s = score(r#"{"eventId":"a","startBeat":0,"durationBeats":2,"voice":"ah","midiNote":62,"volume":0.8}"#);
+    let s = score(
+        r#"{"eventId":"a","startBeat":0,"durationBeats":2,"voice":"ah","midiNote":62,"volume":0.8}"#,
+    );
     let perf = s.to_performance("t").unwrap();
     assert_eq!(perf.syllables.len(), 1);
     assert!(perf.syllables[0].end < 1.0, "the release is still applied");
@@ -48,7 +57,9 @@ fn bad_spans_are_refused() {
 
 #[test]
 fn the_show_lasts_until_the_last_audible_moment() {
-    let s = score(r#"{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":62,"volume":0.8,"sounding":[[0,900]]}"#);
+    let s = score(
+        r#"{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":62,"volume":0.8,"sounding":[[0,900]]}"#,
+    );
     assert_eq!(s.end_ms(), 900);
 }
 
@@ -58,7 +69,12 @@ fn deepest_dip(onset: &str) -> f32 {
            {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"ah","midiNote":64,"volume":0.8,"sounding":[[500,1000]],"onset":"{onset}"}}"#
     ));
     let perf = s.to_performance("t").unwrap();
-    let show = singer::Show::compile(perf.clone(), singer::Style::auto(&perf), singer::Profile::default()).unwrap();
+    let show = singer::Show::compile(
+        perf.clone(),
+        singer::Style::auto(&perf),
+        singer::Profile::default(),
+    )
+    .unwrap();
     let (a, b) = ((0.3f32 * 50.0) as usize, (0.6f32 * 50.0) as usize);
     let lo = show.mouth[a..=b].iter().cloned().fold(f32::MAX, f32::min);
     let peak = show.mouth[..a].iter().cloned().fold(0.0f32, f32::max);
@@ -69,8 +85,14 @@ fn deepest_dip(onset: &str) -> f32 {
 fn touching_syllables_still_articulate_and_a_lip_consonant_shuts_further() {
     let none = deepest_dip("none");
     let closure = deepest_dip("closure");
-    assert!(none >= 0.15, "even a vowel-initial join shows a dip: {none}");
-    assert!(closure > none + 0.05, "a lip consonant dips further: {closure} vs {none}");
+    assert!(
+        none >= 0.15,
+        "even a vowel-initial join shows a dip: {none}"
+    );
+    assert!(
+        closure > none + 0.05,
+        "a lip consonant dips further: {closure} vs {none}"
+    );
 }
 
 /// Beak opening in the middle of each of two tied notes (a run), in the lively style. A narrow
@@ -81,10 +103,16 @@ fn run_openings(from: u8, to: u8) -> (f32, f32) {
         {{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"oo","midiNote":{from},"volume":0.8,"sounding":[[0,500]]}},
         {{"eventId":"b","startBeat":1,"durationBeats":1,"voice":"oo","midiNote":{to},"volume":0.8,"continuesPrevious":true,"sounding":[[500,1000]]}}]}}"#
     );
-    let perf = DuckScore::parse(json.as_bytes()).unwrap().to_performance("t").unwrap();
+    let perf = DuckScore::parse(json.as_bytes())
+        .unwrap()
+        .to_performance("t")
+        .unwrap();
     let style = singer::Style::by_name("lively").unwrap();
     let show = singer::Show::compile(perf, style, singer::Profile::default()).unwrap();
-    (show.mouth[(0.4f32 * 50.0) as usize], show.mouth[(0.95f32 * 50.0) as usize])
+    (
+        show.mouth[(0.4f32 * 50.0) as usize],
+        show.mouth[(0.95f32 * 50.0) as usize],
+    )
 }
 
 #[test]
@@ -119,8 +147,54 @@ fn song_opening(vowel: &str) -> (f32, f32) {
 fn every_song_gets_a_wide_mouth_whatever_vowel_it_is_sung_on() {
     let (ah50, ah90) = song_opening("ah");
     let (oo50, oo90) = song_opening("oo");
-    assert!(ah90 > 0.8 && oo90 > 0.8, "wide ones reach the top: ah {ah90}, oo {oo90}");
-    assert!((ah90 - oo90).abs() < 0.12, "same reach for both: {ah90} vs {oo90}");
-    assert!(oo50 > 0.45, "a song on oo does not look shut: median {oo50}");
-    assert!(ah50 < 0.95, "a song on ah is not pinned open: median {ah50}");
+    assert!(
+        ah90 > 0.8 && oo90 > 0.8,
+        "wide ones reach the top: ah {ah90}, oo {oo90}"
+    );
+    assert!(
+        (ah90 - oo90).abs() < 0.12,
+        "same reach for both: {ah90} vs {oo90}"
+    );
+    assert!(
+        oo50 > 0.45,
+        "a song on oo does not look shut: median {oo50}"
+    );
+    assert!(
+        ah50 < 0.95,
+        "a song on ah is not pinned open: median {ah50}"
+    );
+}
+
+/// Lowest beak opening during the 0.5-0.8 s silence between two notes, lively style.
+fn gap_floor(continues: bool) -> f32 {
+    let s = score(&format!(
+        r#"{{"eventId":"a","startBeat":0,"durationBeats":1,"voice":"ah","midiNote":62,"volume":0.8,"sounding":[[0,400]]}},
+           {{"eventId":"b","startBeat":2,"durationBeats":1,"voice":"ah","midiNote":64,"volume":0.8,"continuesPrevious":{continues},"sounding":[[900,1400]]}}"#
+    ));
+    let perf = s.to_performance("t").unwrap();
+    let style = singer::Style::by_name("lively").unwrap();
+    let show = singer::Show::compile(perf, style, singer::Profile::default()).unwrap();
+    show.mouth[(0.55f32 * 50.0) as usize..=(0.75f32 * 50.0) as usize]
+        .iter()
+        .cloned()
+        .fold(f32::MAX, f32::min)
+}
+
+#[test]
+fn a_tie_across_an_audible_gap_is_not_a_tie() {
+    let free = gap_floor(false);
+    let tied = gap_floor(true);
+    assert!(
+        tied < 0.2,
+        "the beak closes in the silence even if marked tied: {tied} (untied {free})"
+    );
+}
+
+#[test]
+fn a_tie_that_touches_is_kept() {
+    let (a, b) = run_openings(60, 67);
+    assert!(
+        b > a + 0.1,
+        "touching tied pieces still follow the pitch: {a} -> {b}"
+    );
 }

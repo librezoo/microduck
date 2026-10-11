@@ -288,7 +288,7 @@ async fn list_shows(State(s): State<Shared>) -> Json<Value> {
 }
 
 async fn delete_show(State(s): State<Shared>, Path(id): Path<String>) -> Res<Json<Value>> {
-    s.app.delete(&id)?;
+    s.app.delete(&id).await?;
     Ok(Json(json!({"deleted": id})))
 }
 

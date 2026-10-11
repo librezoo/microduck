@@ -729,3 +729,219 @@ async fn the_pose_is_read_from_the_knee_and_not_from_the_label() {
         "in between is moving"
     );
 }
+
+#[tokio::test]
+async fn a_revert_after_a_failed_edit_is_published_from_the_library() {
+    let r = rig().await;
+    let audio_a = wav(2, 8000);
+    let audio_b = wav(3, 8000);
+    assert_eq!(upload(&r, "s9", &audio_a, None).await.0, StatusCode::OK);
+    // An edit: audio B is staged, then the commit never happens (refused or the link dropped).
+    let (st, _) = r
+        .authed(
+            "PUT",
+            "/api/v1/shows/s9/tracks/audio",
+            Some(audio_b.clone()),
+        )
+        .await;
+    assert_eq!(st, StatusCode::OK);
+    // The user reverts to A: the client sees A is already published and sends only the manifest.
+    let m = manifest("s9", &audio_a, None, 16_000);
+    r.authed(
+        "PUT",
+        "/api/v1/shows/s9/manifest",
+        Some(m.to_string().into_bytes()),
+    )
+    .await;
+    let (st, body) = r
+        .authed("POST", "/api/v1/shows/s9/commit", Some(b"{}".to_vec()))
+        .await;
+    assert_eq!(st, StatusCode::OK, "{body}");
+    // A manifest naming B with nothing staged is still refused, not served from A.
+    let m = manifest("s9", &audio_b, None, 16_000);
+    r.authed(
+        "PUT",
+        "/api/v1/shows/s9/manifest",
+        Some(m.to_string().into_bytes()),
+    )
+    .await;
+    let (st, body) = r
+        .authed("POST", "/api/v1/shows/s9/commit", Some(b"{}".to_vec()))
+        .await;
+    assert_eq!(st, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "Corrupt");
+}
+
+const TWO_ROULADES: &[u8] = br#"{"schema":"kivi.motion/1","actions":[{"eventId":"a","type":"skill","skill":"roulade","startMs":1000,"durationMs":4000},{"eventId":"b","type":"skill","skill":"roulade","startMs":9000,"durationMs":4000}]}"#;
+
+fn did_count(r: &Rig) -> usize {
+    r.robot
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(c, proto::Call::RobotDo(_)))
+        .count()
+}
+
+async fn seek(r: &Rig, to: f64) -> StatusCode {
+    r.authed(
+        "POST",
+        "/api/v1/control",
+        Some(
+            json!({"action": "seek", "position": to})
+                .to_string()
+                .into_bytes(),
+        ),
+    )
+    .await
+    .0
+}
+
+async fn at(r: &Rig, t: f64) {
+    *r.robot.st.lock().unwrap() = Some(state("stand", Some(sing_block(t, false)), false));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+}
+
+#[tokio::test]
+async fn a_forward_seek_does_not_fire_the_skills_it_skipped() {
+    let r = rig().await;
+    assert_eq!(
+        upload(&r, "k1", &wav(1, 8000), Some(TWO_ROULADES)).await.0,
+        StatusCode::OK
+    );
+    r.authed("POST", "/api/v1/shows/k1/play", Some(b"{}".to_vec()))
+        .await;
+    at(&r, 0.5).await;
+    r.authed("GET", "/api/v1/snapshot", None).await;
+    assert_eq!(seek(&r, 7.0).await, StatusCode::OK);
+    at(&r, 7.0).await;
+    assert_eq!(
+        did_count(&r),
+        0,
+        "the skill at 1-5 s was skipped, not fired"
+    );
+    at(&r, 9.5).await;
+    assert_eq!(did_count(&r), 1, "the skill at 9 s still fires");
+}
+
+#[tokio::test]
+async fn a_backward_seek_replays_the_skills_again() {
+    let r = rig().await;
+    assert_eq!(
+        upload(&r, "k2", &wav(1, 8000), Some(TWO_ROULADES)).await.0,
+        StatusCode::OK
+    );
+    r.authed("POST", "/api/v1/shows/k2/play", Some(b"{}".to_vec()))
+        .await;
+    at(&r, 1.2).await;
+    assert_eq!(did_count(&r), 1);
+    // Let the skill finish (pose back where it was for over 0.8 s).
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    at(&r, 6.0).await;
+    r.authed("GET", "/api/v1/snapshot", None).await;
+    assert_eq!(seek(&r, 0.2).await, StatusCode::OK);
+    at(&r, 0.2).await;
+    at(&r, 1.2).await;
+    assert_eq!(did_count(&r), 2, "played again after rewinding");
+}
+
+/// A robot link whose calls take a while, as a real robotd decoding a WAV does.
+struct Slow(Arc<FakeRobot>);
+
+#[async_trait::async_trait]
+impl showd::robot::RobotLink for Slow {
+    async fn call(&self, call: proto::Call) -> showd::robot::CallResult {
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        self.0.call(call).await
+    }
+    fn notify(&self, call: proto::Call) {
+        self.0.notify(call)
+    }
+    fn state(&self) -> Option<(proto::RobotState, std::time::Duration)> {
+        self.0.state()
+    }
+}
+
+#[tokio::test]
+async fn two_overlapping_plays_start_the_robot_once() {
+    let r = rig().await;
+    assert_eq!(
+        upload(&r, "o1", &wav(1, 8000), Some(TWO_ROULADES)).await.0,
+        StatusCode::OK
+    );
+    let slow = App::new(
+        r.app.cfg.clone(),
+        r.app.store.clone(),
+        Arc::new(Slow(r.robot.clone())),
+    );
+    let (a, b) = tokio::join!(
+        slow.play("o1", None, false, None),
+        slow.play("o1", None, false, None)
+    );
+    assert_eq!(
+        a.is_ok() as u8 + b.is_ok() as u8,
+        1,
+        "exactly one play wins: {a:?} {b:?}"
+    );
+    let loser = if a.is_err() { a } else { b };
+    assert_eq!(loser.unwrap_err().code, "Busy");
+    let sings = r
+        .robot
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(c, proto::Call::RobotSing(p) if p.active))
+        .count();
+    assert_eq!(sings, 1);
+    at(&r, 1.2).await;
+    assert_eq!(did_count(&r), 1, "one sequencer, one skill");
+}
+
+#[tokio::test]
+async fn a_commit_waits_for_a_play_that_is_starting() {
+    let r = rig().await;
+    assert_eq!(
+        upload(&r, "o2", &wav(1, 8000), None).await.0,
+        StatusCode::OK
+    );
+    let slow = App::new(
+        r.app.cfg.clone(),
+        r.app.store.clone(),
+        Arc::new(Slow(r.robot.clone())),
+    );
+    let (p, c) = tokio::join!(slow.play("o2", None, false, None), async {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        slow.commit("o2").await
+    });
+    assert!(p.is_ok(), "{p:?}");
+    // The manifest is already consumed by the first publish, so the commit may say Missing; what it
+    // must never do is succeed or swap the files of the show that is now playing.
+    assert_ne!(c.as_ref().err().map(|e| e.code), None, "{c:?}");
+}
+
+#[tokio::test]
+async fn concurrent_commits_of_one_show_do_not_corrupt_each_other() {
+    let r = rig().await;
+    let audio = wav(1, 8000);
+    for (name, b) in [("duck", DUCK.to_vec()), ("audio", audio.clone())] {
+        r.authed("PUT", &format!("/api/v1/shows/c1/tracks/{name}"), Some(b))
+            .await;
+    }
+    let m = manifest("c1", &audio, None, 16_000);
+    r.authed(
+        "PUT",
+        "/api/v1/shows/c1/manifest",
+        Some(m.to_string().into_bytes()),
+    )
+    .await;
+    let results = futures_util::future::join_all((0..6).map(|_| r.app.commit("c1"))).await;
+    let ok = results.iter().filter(|x| x.is_ok()).count();
+    assert!(ok >= 1, "{results:?}");
+    for e in results.iter().filter_map(|x| x.as_ref().err()) {
+        // A later commit finds staging consumed: Missing, never a lie about corruption.
+        assert_eq!(e.code, "Missing", "{e:?}");
+    }
+    assert!(r.app.store.get("c1").is_some());
+}

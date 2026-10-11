@@ -111,6 +111,16 @@ async fn main() -> Result<()> {
         max_events: 2000,
         volume_file: a.data.join("volume"),
     };
+    // Abandoned uploads are reaped while the service runs, not only at its next start.
+    let sweeper = store.clone();
+    tokio::spawn(async move {
+        let mut every = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            every.tick().await;
+            let s = sweeper.clone();
+            let _ = tokio::task::spawn_blocking(move || s.sweep_staging(24 * 3600 * 1000)).await;
+        }
+    });
     let app = App::new(cfg, store, robot);
     tracing::info!(
         device_id,

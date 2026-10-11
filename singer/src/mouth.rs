@@ -154,7 +154,9 @@ fn target_open(perf: &Performance, s: &Syllable, st: &MouthStyle) -> f32 {
 /// opening and stay out of the statistics. Bounded, so a song with little variation is not
 /// stretched into noise.
 fn fit_to_song(opens: &mut [f32], sy: &[Syllable], st: &MouthStyle) {
-    let sung: Vec<usize> = (0..opens.len()).filter(|&i| sy[i].vowel != Vowel::Mm).collect();
+    let sung: Vec<usize> = (0..opens.len())
+        .filter(|&i| sy[i].vowel != Vowel::Mm)
+        .collect();
     if sung.len() < 8 {
         for o in opens.iter_mut() {
             *o = (*o * st.gain).clamp(0.0, 1.0);
@@ -325,7 +327,13 @@ pub fn compile(
             let pulse = st.pulse_beats > 0.0;
             let beat = if perf.bpm > 0.0 { 60.0 / perf.bpm } else { 0.6 };
             let period = if pulse {
-                st.pulse_beats * beat * if hash01(seed, i as u64, 3) > 0.5 { 1.0 } else { 0.5 }
+                st.pulse_beats
+                    * beat
+                    * if hash01(seed, i as u64, 3) > 0.5 {
+                        1.0
+                    } else {
+                        0.5
+                    }
             } else {
                 1.9 + 1.0 * hash01(seed, i as u64, 2)
             };
@@ -530,4 +538,55 @@ pub fn compile(
     }
     stats.limiter_frac = limited as f32 / n as f32;
     (out, stats)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn song(opens: &[f32]) -> Vec<Syllable> {
+        (0..opens.len())
+            .map(|i| Syllable {
+                start: i as f32,
+                end: i as f32 + 0.8,
+                vowel: Vowel::Ah,
+                onset: Onset::None,
+                pitch: 60.0,
+                level: 0.7,
+                accent: 0.0,
+                confidence: 1.0,
+                tie: false,
+            })
+            .collect()
+    }
+
+    fn fitted(opens: &[f32], flatten: f32) -> Vec<f32> {
+        let st = MouthStyle {
+            flatten,
+            ..crate::style::Style::lively().mouth
+        };
+        let mut o = opens.to_vec();
+        fit_to_song(&mut o, &song(opens), &st);
+        o
+    }
+
+    #[test]
+    fn fitting_puts_the_wide_end_at_the_top_and_the_narrow_end_half_a_range_below() {
+        let o = fitted(&[0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4, 0.9], 0.0);
+        assert!(o.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!((o[1] - 1.0).abs() < 1e-4, "wide {}", o[1]);
+        assert!((o[0] - 0.55).abs() < 0.01, "narrow {}", o[0]);
+    }
+
+    #[test]
+    fn a_song_with_few_syllables_is_not_stretched() {
+        let o = fitted(&[0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4], 0.0);
+        assert_eq!(o, vec![0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4]);
+    }
+
+    #[test]
+    fn flatten_one_makes_every_syllable_the_same() {
+        let o = fitted(&[0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4, 0.9, 0.4, 0.9], 1.0);
+        assert!(o.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-5), "{o:?}");
+    }
 }

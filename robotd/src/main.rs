@@ -672,6 +672,9 @@ struct RobotState {
     /// A performance is running — set by the control loop, read by the IPC side to refuse a
     /// pause or a seek when there is nothing to pause.
     performing: AtomicBool,
+    /// The chorale or the theremin has the beak right now — set by the control loop, read by the
+    /// IPC side to refuse a `robot.sing` the loop would only drop.
+    beak_busy: AtomicBool,
     /// `walk` or `roller`, as `robot.mode` reports it.
     ///
     /// Not constant any more: `robot.setMode` switches it while the robot runs, so this is stored
@@ -758,6 +761,7 @@ impl RobotState {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("/var/lib/showd/shows")),
             performing: AtomicBool::new(false),
+            beak_busy: AtomicBool::new(false),
             mode: AtomicU8::new(mode_code(params.policy.mode)),
             fallen: AtomicBool::new(false),
             moving: AtomicBool::new(false),
@@ -3448,6 +3452,10 @@ async fn control_loop<T: RobotIo>(
         // running it *is* the beak and a performance yields to it — and before the mouth intent,
         // which a performance overrides for as long as it lasts.
         let mut sing_state = None;
+        state.beak_busy.store(
+            chorale_state.is_some() || theremin_state.is_some(),
+            Ordering::Relaxed,
+        );
         for command in intents.take_sing() {
             match command {
                 sing::Command::Stop => {
@@ -5023,18 +5031,23 @@ fn dispatch(
         // and the compile happens on this task rather than on the control thread: the loop is
         // handed a finished show and only has to run it.
         proto::Call::RobotSing(p) => {
-            let result =
-                match sing::prepare(p, state.chorale_accepted, state.has_voice, &state.show_root) {
-                    Ok((command, result)) => {
-                        intents.request_sing(command);
-                        result
-                    }
-                    Err(reason) => proto::SingResult {
-                        accepted: false,
-                        reason: Some(reason),
-                        ..Default::default()
-                    },
-                };
+            let door = sing::Door {
+                opted_in: state.chorale_accepted,
+                has_voice: state.has_voice,
+                beak_busy: state.beak_busy.load(Ordering::Relaxed),
+                show_root: &state.show_root,
+            };
+            let result = match sing::prepare(p, &door) {
+                Ok((command, result)) => {
+                    intents.request_sing(command);
+                    result
+                }
+                Err(reason) => proto::SingResult {
+                    accepted: false,
+                    reason: Some(reason),
+                    ..Default::default()
+                },
+            };
             proto::Response::ok(Some(id), &result)
         }
 

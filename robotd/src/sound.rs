@@ -12,7 +12,8 @@
 //!    same: a client that says "released" cuts it (kill the child, the writer exits on the
 //!    broken pipe), while a hold that merely went stale lands it — the writer is let out of
 //!    its loop and writes the end segment into a pipe that is still open. Only the second
-//!    one ever plays `wheee_end_*`, which is why [`Ride`] is a state and not a bool.
+//!    one ever plays `wheee_end_*`, which is why [`Ride`] is a state and not a bool. The cut
+//!    applies to a ride that is still riding; a landing one is left to drain.
 //!
 //!  - **The theremin is synthesized, not played.** Every other sound here is a wav the
 //!    bank rendered in advance, which works because their shape is known in advance. A
@@ -92,8 +93,9 @@ enum Ride {
     Off,
     /// The writer thread is streaming start → loop into an open pipe.
     Riding,
-    /// The writer is on the end segment, or `aplay` is draining it. Reaped when the child
-    /// exits; a fresh press supersedes it.
+    /// The writer is on the end segment, or `aplay` is draining it: a wheee's end segment, a
+    /// synthesized voice's fade-out, or the last ~80 ms of a show's audio. Reaped when the
+    /// child exits; a fresh press supersedes it, a `Released` hold does not cut it.
     Landing,
     /// The theremin holds the PCM: a writer thread is synthesizing from live parameters,
     /// and will keep doing so until the loop takes the instrument away.
@@ -104,6 +106,52 @@ enum Ride {
     /// A show's audio holds the PCM: a writer thread is streaming a decoded WAV that the loop can
     /// pause, resume and seek.
     File,
+}
+
+/// The show-audio writer's pacing clock: frame `base` is due at second `t0`, and every later
+/// frame follows at `rate`. Pure arithmetic over a caller-supplied time so it can be tested; what
+/// has been written but is not yet due is what `aplay`'s pipe and ring still hold.
+#[derive(Debug, Clone, Copy)]
+struct Pacer {
+    t0: f64,
+    base: usize,
+    rate: f64,
+}
+
+impl Pacer {
+    /// How far ahead of the speaker the writer holds itself.
+    const LEAD_S: f64 = 0.06;
+
+    fn at(t0: f64, base: usize, rate: f64) -> Self {
+        Pacer { t0, base, rate }
+    }
+
+    /// Seconds of audio written up to `cursor` that are still to be heard at `now`.
+    fn ahead_s(&self, now: f64, cursor: usize) -> f64 {
+        cursor.saturating_sub(self.base) as f64 / self.rate - (now - self.t0)
+    }
+
+    /// Frames handed to `aplay` that it has not played yet.
+    fn queued(&self, now: f64, cursor: usize) -> usize {
+        (self.ahead_s(now, cursor).max(0.0) * self.rate) as usize
+    }
+
+    /// How long to sleep after a write, if the writer is further ahead than the lead.
+    fn sleep_for(&self, now: f64, cursor: usize) -> Option<f64> {
+        let ahead = self.ahead_s(now, cursor);
+        (ahead > Self::LEAD_S).then(|| ahead - Self::LEAD_S)
+    }
+
+    /// Jump to `target`, the frame the show clock says is due now. `aplay` cannot be flushed,
+    /// so what is already queued plays first: the new audio goes in behind it, skipping that
+    /// many frames so it lands when the clock says, and the pacing re-anchors at the moment it
+    /// starts. Returns the new cursor; the lead stays what it was instead of growing per jump.
+    fn land(&mut self, now: f64, cursor: usize, target: usize, total: usize) -> usize {
+        let queued = self.queued(now, cursor);
+        let cursor = (target + queued).min(total);
+        *self = Pacer::at(now + queued as f64 / self.rate, cursor, self.rate);
+        cursor
+    }
 }
 
 /// What the loop tells a file-playing writer thread. Atomics for the reason [`Live`] gives.
@@ -620,22 +668,38 @@ impl Sound {
                 let block_frames = (rate as usize / 50).max(1);
                 let mut cursor = start_frame.min(total);
                 let mut seen_gen = 0u64;
-                let mut anchor: Option<(Instant, usize)> = None;
+                let epoch = Instant::now();
+                let mut pacer = Pacer::at(0.0, cursor, f64::from(rate));
+                // The frame a pause or a seek-while-paused resumes from: where the show clock
+                // stands, not where the writer's cursor ran ahead to.
+                let mut held: Option<usize> = None;
                 let mut bytes = Vec::with_capacity(block_frames * channels * 2);
                 loop {
                     if !live.running.load(Ordering::Relaxed) {
                         return;
                     }
+                    let now = epoch.elapsed().as_secs_f64();
+                    let paused = live.paused.load(Ordering::Relaxed);
                     let generation = live.seek_gen.load(Ordering::Relaxed);
                     if generation != seen_gen {
                         seen_gen = generation;
-                        cursor = (live.seek_frame.load(Ordering::Relaxed) as usize).min(total);
-                        anchor = None;
+                        let target = (live.seek_frame.load(Ordering::Relaxed) as usize).min(total);
+                        if paused {
+                            held = Some(target);
+                        } else {
+                            held = None;
+                            cursor = pacer.land(now, cursor, target, total);
+                        }
                     }
-                    if live.paused.load(Ordering::Relaxed) {
-                        anchor = None;
+                    if paused {
+                        if held.is_none() {
+                            held = Some(cursor.saturating_sub(pacer.queued(now, cursor)));
+                        }
                         std::thread::sleep(Duration::from_millis(10));
                         continue;
+                    }
+                    if let Some(frame) = held.take() {
+                        cursor = pacer.land(now, cursor, frame, total);
                     }
                     if cursor >= total {
                         live.finished.store(true, Ordering::Relaxed);
@@ -646,17 +710,18 @@ impl Sound {
                     for sample in &pcm[cursor * channels..(cursor + n) * channels] {
                         bytes.extend_from_slice(&sample.to_le_bytes());
                     }
-                    let (t0, base) = *anchor.get_or_insert_with(|| (Instant::now(), cursor));
                     if stdin.write_all(&bytes).is_err() {
                         live.finished.store(true, Ordering::Relaxed);
                         return; // `aplay` is gone
                     }
                     cursor += n;
-                    live.played.store(cursor as u64, Ordering::Relaxed);
-                    let ahead =
-                        (cursor - base) as f64 / f64::from(rate) - t0.elapsed().as_secs_f64();
-                    if ahead > 0.06 {
-                        std::thread::sleep(Duration::from_secs_f64(ahead - 0.06));
+                    let now = epoch.elapsed().as_secs_f64();
+                    live.played.store(
+                        cursor.saturating_sub(pacer.queued(now, cursor)) as u64,
+                        Ordering::Relaxed,
+                    );
+                    if let Some(sleep) = pacer.sleep_for(now, cursor) {
+                        std::thread::sleep(Duration::from_secs_f64(sleep));
                     }
                 }
             });
@@ -846,8 +911,11 @@ impl Sound {
             // A press during a landing ride supersedes it — `start_wheee` takes the PCM.
             WheeeHold::Held if self.ride != Ride::Riding => self.start_wheee(),
             WheeeHold::Held => {}
-            // The client said "released": cut it, as the prototype does.
-            WheeeHold::Released if self.ride != Ride::Off => self.stop_child(),
+            // The client said "released": cut a ride that is still riding, as the prototype
+            // does. A landing ride (a decayed wheee, or a theremin, chorale or show let go) is
+            // already on its way out: it drains and is freed by `reap_landing`; only a fresh
+            // press supersedes it.
+            WheeeHold::Released if self.ride == Ride::Riding => self.stop_child(),
             // The hold went stale — the client stopped re-notifying, or stopped existing.
             // Land the ride rather than chopping it: nobody asked for a cut.
             WheeeHold::Decayed if self.ride == Ride::Riding => self.land_ride(),
@@ -1106,5 +1174,84 @@ mod tests {
         assert_eq!(sound.ride, Ride::Off);
         assert!(!sound.wheee_held.load(Ordering::Relaxed));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_landing_ride_is_not_cut_by_the_idle_release() {
+        let dir = std::env::temp_dir().join(format!("sound-landing-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("wheee")).unwrap();
+        let mut sound = Sound::new(dir.clone(), "null".into());
+        sound.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
+        sound.ride = Ride::Landing;
+        sound.wheee(WheeeHold::Released);
+        assert!(sound.child.is_some(), "a draining child survives Released");
+        assert_eq!(sound.ride, Ride::Landing);
+        // The loop's own order each tick: settle, then the idle hold.
+        sound.ride = Ride::File;
+        sound.file_stop();
+        sound.theremin_settle();
+        sound.wheee(WheeeHold::Released);
+        assert!(sound.child.is_some(), "a let-go show audio drains");
+        sound.stop_child();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    const R: f64 = 48_000.0;
+
+    #[test]
+    fn the_pacer_holds_its_lead_in_steady_state() {
+        let p = Pacer::at(0.0, 0, R);
+        // 20 ms written at t=0: 960 frames queued, no sleep until past the 60 ms lead.
+        assert_eq!(p.queued(0.0, 960), 960);
+        assert_eq!(p.sleep_for(0.0, 960), None);
+        let s = p.sleep_for(0.0, 4800).unwrap();
+        assert!((s - 0.04).abs() < 1e-9);
+        assert_eq!(p.queued(1.0, 960), 0, "everything written has played");
+    }
+
+    #[test]
+    fn repeated_seeks_do_not_grow_the_lag() {
+        let mut p = Pacer::at(0.0, 0, R);
+        let mut cursor = 0usize;
+        let mut now = 0.0;
+        // Steady state: ~60 ms queued.
+        while p.sleep_for(now, cursor).is_none() {
+            cursor += 960;
+        }
+        for k in 1..=8 {
+            now = f64::from(k);
+            let target = (now * R) as usize;
+            cursor = p.land(now, cursor, target, usize::MAX);
+            // The new audio is heard when the show clock says: queued frames are skipped.
+            let heard_at = now + p.ahead_s(now, cursor) - (cursor - target) as f64 / R;
+            assert!((heard_at - now).abs() < 1e-6, "seek {k} heard late");
+            // Refill to the lead; the queue never exceeds one lead plus a block.
+            while p.sleep_for(now, cursor).is_none() {
+                cursor += 960;
+            }
+            assert!(p.queued(now, cursor) as f64 / R < 0.09);
+        }
+    }
+
+    #[test]
+    fn a_resume_lands_on_the_show_frame() {
+        let p = Pacer::at(0.0, 0, R);
+        let cursor = 4800; // 100 ms written at t=0.04: 60 ms queued
+        let now = 0.04;
+        let heard = cursor - p.queued(now, cursor); // where the show clock stood at the pause
+        assert_eq!(heard, 1920);
+        // A long pause: the tail played out, the resume starts exactly at the held frame.
+        let mut long = p;
+        assert_eq!(long.land(2.0, cursor, heard, usize::MAX), heard);
+        // A short one (30 ms): 30 ms is still queued, the new audio goes in behind it.
+        let mut short = p;
+        let c = short.land(0.07, cursor, heard, usize::MAX);
+        assert_eq!(c, heard + 1440); // 30 ms still queued
+    }
+
+    #[test]
+    fn a_seek_clamps_to_the_end_of_the_file() {
+        let mut p = Pacer::at(0.0, 0, R);
+        assert_eq!(p.land(0.0, 4800, 9_000, 10_000), 10_000);
     }
 }

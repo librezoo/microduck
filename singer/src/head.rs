@@ -299,7 +299,11 @@ pub fn compile(
     } else {
         Vec::new()
     };
-    let bar_s = if perf.bpm > 0.0 { 4.0 * 60.0 / perf.bpm } else { 2.0 };
+    let bar_s = if perf.bpm > 0.0 {
+        4.0 * 60.0 / perf.bpm
+    } else {
+        2.0
+    };
     let dt = 1.0 / profile.rate;
     let mut out = Vec::with_capacity(n);
     let mut prev = [0.0f32; 4];
@@ -405,7 +409,10 @@ pub fn compile(
         let follow = follow_track.get(k).map_or(0.0, |v| st.follow * v);
         // swing: a groove across the bars, ducked while a nod or an accent is happening.
         let (swing_yaw, swing_roll) = if layers.swing && st.swing > 0.0 {
-            let singing = perf.phrases.iter().any(|p| t >= p.start - 0.3 && t <= p.end + 0.3);
+            let singing = perf
+                .phrases
+                .iter()
+                .any(|p| t >= p.start - 0.3 && t <= p.end + 0.3);
             let w = if singing { 1.0 } else { st.listen * 0.7 };
             let g = (1.0 - 0.6 * acc_norm) * (1.0 - 0.5 * prep_norm.min(1.0));
             let (_, variant) = section_gain(perf, t);
@@ -510,7 +517,11 @@ fn swing_at(t: f32, bar_s: f32, seed: u64, phase: f32) -> (f32, f32) {
     let frac = x - bar;
     let amp = |i: f32| {
         let size = 0.4 + 0.6 * hash01(seed, (i + 1000.0) as u64, 41);
-        let dir = if hash01(seed, (i + 1000.0) as u64, 43) > 0.5 { 1.0 } else { -1.0 };
+        let dir = if hash01(seed, (i + 1000.0) as u64, 43) > 0.5 {
+            1.0
+        } else {
+            -1.0
+        };
         size * dir
     };
     // One half-wave per bar: out and back, from this bar's amplitude into the next one's.

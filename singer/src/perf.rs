@@ -170,6 +170,15 @@ impl std::fmt::Display for Invalid {
 }
 impl std::error::Error for Invalid {}
 
+/// Longest song a performance may describe, seconds. The tracks are sized from it (200 samples a
+/// second, four of them), so an unbounded duration is an unbounded allocation.
+pub const MAX_DURATION_S: f32 = 4.0 * 3600.0;
+/// Tempo bounds for a known tempo (the Studio route bounds it to 20..300; this is wider).
+pub const MIN_BPM: f32 = 1.0;
+pub const MAX_BPM: f32 = 1000.0;
+/// MIDI-ish pitch bound: far outside any voice, well inside what f32 arithmetic can square.
+pub const MAX_PITCH: f32 = 1000.0;
+
 impl Performance {
     pub fn from_json(text: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let p: Performance = serde_json::from_str(text)?;
@@ -184,8 +193,13 @@ impl Performance {
     /// Time-ordered, non-overlapping syllables; phrases and sections inside the song; sane ranges.
     pub fn validate(&self) -> Result<(), Invalid> {
         let bad = |m: String| Err(Invalid(m));
-        if !(self.duration.is_finite() && self.duration > 0.0) {
+        if !(self.duration.is_finite() && self.duration > 0.0 && self.duration <= MAX_DURATION_S) {
             return bad(format!("duration {}", self.duration));
+        }
+        // 0 or less means "tempo unknown" (every consumer guards `bpm > 0`); anything else has to
+        // be a tempo a person could count.
+        if !(self.bpm <= 0.0 || (MIN_BPM..=MAX_BPM).contains(&self.bpm)) {
+            return bad(format!("bpm {}", self.bpm));
         }
         let mut prev_end = 0.0f32;
         for (i, s) in self.syllables.iter().enumerate() {
@@ -201,6 +215,9 @@ impl Performance {
             if s.end > self.duration + 1e-3 {
                 return bad(format!("syllable {i} ends past the song"));
             }
+            if !(s.pitch.abs() <= MAX_PITCH) {
+                return bad(format!("syllable {i}: pitch {}", s.pitch));
+            }
             for (name, v) in [
                 ("level", s.level),
                 ("accent", s.accent),
@@ -213,13 +230,19 @@ impl Performance {
             prev_end = s.end;
         }
         for (i, p) in self.phrases.iter().enumerate() {
-            if p.end <= p.start || p.start < 0.0 || p.end > self.duration + 1e-3 {
+            let inside = p.start >= 0.0 && p.end > p.start && p.end <= self.duration + 1e-3;
+            if !(inside && p.climax.is_finite() && p.breath.is_finite()) {
                 return bad(format!("phrase {i}: {}..{}", p.start, p.end));
             }
         }
         for (i, s) in self.sections.iter().enumerate() {
-            if s.end <= s.start {
+            if !(s.start.is_finite() && s.end.is_finite() && s.end > s.start) {
                 return bad(format!("section {i}: {}..{}", s.start, s.end));
+            }
+        }
+        for (i, b) in self.beats.iter().enumerate() {
+            if !(b.t.is_finite() && b.strength.is_finite()) {
+                return bad(format!("beat {i}: {} / {}", b.t, b.strength));
             }
         }
         Ok(())
@@ -372,5 +395,63 @@ mod tests {
         let (lo, hi) = p.pitch_range();
         assert!(lo < 62.5 && hi > 66.5);
         assert!(p.pitch_norm(70.0) == 1.0 && p.pitch_norm(50.0) == 0.0);
+    }
+
+    #[test]
+    fn values_that_would_poison_a_track_are_refused() {
+        let mut cases: Vec<(&str, Performance)> = Vec::new();
+        let mut p = tiny();
+        p.syllables[0].pitch = f32::INFINITY;
+        cases.push(("infinite pitch", p));
+        let mut p = tiny();
+        p.syllables[0].pitch = f32::NAN;
+        cases.push(("NaN pitch", p));
+        let mut p = tiny();
+        p.syllables[1].pitch = 3.0e38;
+        cases.push(("absurd pitch", p));
+        let mut p = tiny();
+        p.bpm = f32::INFINITY;
+        cases.push(("infinite bpm", p));
+        let mut p = tiny();
+        p.bpm = f32::NAN;
+        cases.push(("NaN bpm", p));
+        let mut p = tiny();
+        p.duration = 1.0e9;
+        cases.push(("endless duration", p));
+        let mut p = tiny();
+        p.phrases[0].start = f32::NAN;
+        cases.push(("NaN phrase start", p));
+        let mut p = tiny();
+        p.phrases[0].end = f32::NAN;
+        cases.push(("NaN phrase end", p));
+        let mut p = tiny();
+        p.phrases[0].climax = f32::NAN;
+        cases.push(("NaN climax", p));
+        let mut p = tiny();
+        p.sections[0].start = f32::NAN;
+        cases.push(("NaN section start", p));
+        let mut p = tiny();
+        p.sections[0].end = f32::INFINITY;
+        cases.push(("infinite section end", p));
+        let mut p = tiny();
+        p.beats.push(Beat {
+            t: f32::NAN,
+            strength: 1.0,
+        });
+        cases.push(("NaN beat", p));
+        for (what, p) in cases {
+            assert!(p.validate().is_err(), "{what} must be refused");
+        }
+    }
+
+    #[test]
+    fn a_twenty_minute_song_at_any_ordinary_tempo_validates() {
+        for bpm in [0.0, 20.0, 120.0, 300.0] {
+            let mut p = tiny();
+            p.bpm = bpm;
+            p.duration = 1200.0;
+            p.sections[0].end = 1200.0;
+            p.validate().unwrap_or_else(|e| panic!("bpm {bpm}: {e}"));
+        }
     }
 }
