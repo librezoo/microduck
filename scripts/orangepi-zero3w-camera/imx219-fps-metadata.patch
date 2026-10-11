@@ -1,0 +1,12 @@
+diff --git a/bsp/drivers/vin/modules/sensor/imx219.c b/bsp/drivers/vin/modules/sensor/imx219.c
+--- a/bsp/drivers/vin/modules/sensor/imx219.c
++++ b/bsp/drivers/vin/modules/sensor/imx219.c
+@@ -704,7 +704,7 @@ static struct sensor_win_size sensor_win_sizes[] = {
+ 	 .vts = 0x06e6,								// 1766
+ 	 .pclk = (182 * 1000 * 1000),
+ 	 .mipi_bps = 720 * 1000 * 1000,
+-	 .fps_fixed = 1,
++	 .fps_fixed = 30,
+ 	 .bin_factor = 2,
+ 	 .intg_min = 1 << 4,
+ 	 .intg_max = (2607 - 4) << 4,
