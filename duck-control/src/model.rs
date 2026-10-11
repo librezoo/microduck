@@ -11,7 +11,8 @@
 /// Left leg (5) · neck/head/mouth (5) · right leg (5).
 pub const NUM_JOINTS: usize = 15;
 
-/// Dynamixel IDs, indexed as [`JOINT_NAMES`].
+/// Dynamixel IDs, indexed as [`JOINT_NAMES`] — from the protocol crate too, since
+/// `robot.health` names a missing servo by its ID and a client has to say which joint it is.
 pub use duck_ipc_proto::JOINT_IDS;
 
 /// Joint names, from the protocol crate — the wire indexes `joints` and `targets`
@@ -20,6 +21,7 @@ pub use duck_ipc_proto::JOINT_IDS;
 pub use duck_ipc_proto::JOINT_NAMES;
 
 const _: () = assert!(JOINT_NAMES.len() == NUM_JOINTS);
+const _: () = assert!(JOINT_IDS.len() == NUM_JOINTS);
 
 /// The mouth is absent from every alpha policy — they are all 61-D observation, 14-action,
 /// and the action vector skips this index. Named so that omission is deliberate rather

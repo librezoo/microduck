@@ -21,7 +21,7 @@ use linux_embedded_hal::I2cdev;
 use nalgebra::Vector3;
 
 use super::{BETA, ImuStatus, Int1Line, RETRY_MAX, RETRY_MIN, TEMP_EVERY, sleep_unless_shutdown};
-use crate::BUS_CANDIDATES;
+use tof::link::BUS_CANDIDATES;
 use crate::imu_timing::{CaptureClock, DataReady};
 
 const ACC: u8 = 0x19;

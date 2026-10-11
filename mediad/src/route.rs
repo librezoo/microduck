@@ -64,6 +64,8 @@ fn permits(call: &proto::Call) -> bool {
         // The theremin rides with the sounds: it is one, and a browser that can quack a duck
         // may pick its instrument up too.
         RobotDo(_) | RobotSound(_) | RobotTheremin(_) => true,
+        // Somebody watching through the camera is who wants the room lit.
+        RobotFlashlight(_) => true,
 
         // A performance is a sound with a body: a browser that can quack a duck may ask it to sing,
         // and the state stream carries its progress.
@@ -86,7 +88,7 @@ fn permits(call: &proto::Call) -> bool {
         // camera: it is looking at the robot, which is precisely what a phone in the room over
         // Bluetooth was not. Permitted for that reason, and it would be worth revisiting if a
         // control-only session without video ever becomes a normal thing.
-        RobotEnable(_) | RobotInit | RobotRelax | RobotRebootMotors(_) => true,
+        RobotEnable(_) | RobotInit | RobotRelax | RobotRebootMotors(_) | RobotRest => true,
 
         // `robot.stop` is permitted here and refused over BLE, and the difference is honesty
         // rather than authority. BLE's objection was that a stop button over "an unbonded,
