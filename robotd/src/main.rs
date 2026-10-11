@@ -3205,7 +3205,9 @@ async fn control_loop<T: RobotIo>(
             body_ema = [0.0; 3];
         }
         // Still: the policy has the robot, nothing asks it to move or is moving it, nobody has
-        // steered the head lately, and it is not singing (the chorale owns the head then).
+        // steered the head lately, and it is not singing (the chorale or a solo performance owns
+        // the head then: glances laid over a performance would be random head turns the show
+        // never asked for).
         let still = was_driving
             && !in_limp_fall
             && !pickup_paused
@@ -3213,6 +3215,8 @@ async fn control_loop<T: RobotIo>(
             && twist_ema.iter().all(|v| v.abs() < 1e-3)
             && snapshot.head_age >= idle_head::IDLE_AFTER
             && chorale_head.iter().all(|v| v.abs() < 1e-3)
+            && performer.is_none()
+            && sing_head.iter().all(|v| v.abs() < 1e-3)
             && controller.as_ref().is_some_and(|c| !c.busy());
         let idle = idle_head.tick(tick_start, still, period);
         // The breath moves the body pose, which only the standing network is trained on — and
