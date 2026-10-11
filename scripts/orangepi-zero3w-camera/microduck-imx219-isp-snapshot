@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+output=${1:-/tmp/imx219-isp.jpg}
+root=${MICRODUCK_AWISP_ROOT:-/opt/microduck-awisp}
+workdir=$(mktemp -d /tmp/imx219-isp.XXXXXX)
+pipeline=
+cleanup() {
+  if [ -n "$pipeline" ]; then
+    kill "$pipeline" 2>/dev/null || true
+    wait "$pipeline" 2>/dev/null || true
+  fi
+  rm -rf "$workdir"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Stop two snapshot clients from controlling this ISP simultaneously.
+exec 9>/run/lock/microduck-imx219.lock
+flock -n 9 || { echo 'Camera snapshot already running' >&2; exit 1; }
+test -r "$root/lib/libmicroduck-imx219-compat.so"
+
+env \
+  LD_PRELOAD="$root/lib/libmicroduck-imx219-compat.so${LD_PRELOAD:+:$LD_PRELOAD}" \
+  LD_LIBRARY_PATH="$root/lib" \
+  GST_PLUGIN_PATH="$root/gst" \
+  GST_REGISTRY="$workdir/registry.bin" \
+  timeout --signal=INT --kill-after=5s 25s gst-launch-1.0 -q -e \
+    v4l2src device=/dev/video0 en-awisp=1 en-largemode=0 num-buffers=300 do-timestamp=true ! \
+    video/x-raw,format=NV12,width=640,height=480,framerate=30/1 ! \
+    jpegenc quality=95 ! \
+    multifilesink max-files=1 location="$workdir/frame-%03d.jpg" >"$workdir/isp.log" 2>&1 &
+pipeline=$!
+
+# Allow automatic exposure and white balance to settle without competing I2C writes.
+if wait "$pipeline"; then
+  pipeline=
+else
+  result=$?
+  pipeline=
+  cat "$workdir/isp.log" >&2
+  exit "$result"
+fi
+cp "$workdir/isp.log" "${output}.log"
+# A successful capture with the fallback tuning profile is still incorrect.
+if ! grep -q 'find imx219_1920_1080_30_0 \[imx219_1080p_isp_cfg\] isp config' "$workdir/isp.log"; then
+  cat "$workdir/isp.log" >&2
+  echo 'IMX219 1080p ISP profile was not selected' >&2
+  exit 1
+fi
+
+last=$(find "$workdir" -name 'frame-*.jpg' -type f | sort | tail -n 1)
+test -n "$last"
+cp "$last" "$output"
+printf '%s\n' "$output"
