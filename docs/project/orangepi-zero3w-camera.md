@@ -1,9 +1,9 @@
 # Orange Pi Zero 3W camera bring-up
 
-Validated on 2026-10-11: Orange Pi Zero 3W, Allwinner A733 / ISP602, an IMX219
-on CAM1, and `6.6.98-sun60iw2-microduck-xbox2`. Colour capture works with the
-existing kernel once the sensor's reported frame rate selects the correct ISP
-tuning profile. This branch provides standalone camera tools; the Orange Pi
+Validated on 2026-10-11 and 2026-10-12: Orange Pi Zero 3W, Allwinner A733 /
+ISP602, an IMX219 on CAM1, and `6.6.98-sun60iw2-microduck-xbox2`. Colour capture
+works with the existing kernel once the sensor's reported frame rate selects
+the correct ISP tuning profile. This branch provides standalone camera tools; the Orange Pi
 source and encoder are not yet integrated into `mediad` or WebRTC.
 
 ## Why the image was green
@@ -92,14 +92,19 @@ Instrumented hardware validation of the installed snapshot recorded:
 - 300 successful H3A statistics reads and zero failed reads; one error event
   occurred during startup before valid statistics became available.
 - 31 successful sensor exposure/gain calls and 301 ISP register loads.
-- 301 white-balance gain updates; the four-channel tuple changed from
-  `492,256,256,374` to `574,256,256,400`, then settled.
 - A second capture without diagnostic instrumentation also selected the correct
   profile and produced a visually correct colour frame.
 
+An early probe intercepted the ISP white-balance setter and counted 301 calls,
+but these counts do not establish that the gains reached hardware. A later A/B
+test found that this probe itself caused a green image; removing the setter
+hook restored colour. `RTLD_NEXT` forwarding of symbols from GStreamer's local
+plugin libraries is unreliable. Use libc ioctl observation for statistics and
+exposure diagnostics, without replacing the vendor's white-balance setter.
+
 The initial hypothesis that Linux 6.6 made hardware AE/AWB unusable was incorrect.
 TDM subscription and debug-info ioctl warnings remain in the log, but did not
-block the measured statistics, exposure or white-balance updates. A single
+block the measured statistics/exposure calls or normal-colour capture. A single
 startup `AEWB: stats error` line must not be interpreted as continuous failure.
 Colour-chart calibration and controlled lighting sweeps remain future work.
 
@@ -108,6 +113,46 @@ native compilation passed with `-Wall -Wextra -Werror`, and the staged snapshot
 selected the expected profile and produced a 640x480 JPEG. A modified package
 was rejected before installation, reinstall preserved the previous files in its
 backup, and a held camera lock made a second snapshot fail before capture.
+
+The 1080p follow-up saved the same frame both as uncompressed NV12 and JPEG.
+Comparing their luminance planes gave 50.2 dB PSNR (0.79 levels RMS error out of
+255): JPEG compression was not the main source of softness. The indoor capture
+requested about 80 ms exposure and 8.8x sensor gain. Motion blur and low-light
+noise can therefore remain after raising the resolution; lens focus and ISP
+detail processing needed a static daylight follow-up to distinguish.
+
+On 2026-10-12, a fixed daylight bookshelf scene still lacked fine detail.
+Sensor register reads confirmed a 1920x1080 crop, 1920x1080 output, no binning
+(`0x0174/0x0175 = 0`), and unit sampling increments. The scaler reported matching
+1920x1080 crop and compose rectangles: the picture was not upscaled from VGA.
+A direct `RG10` V4L2 capture bypassed the ISP; the BSP's ISP stream handler
+returns early for this raw format. Raw buffers used a 3840-byte row stride and
+1088 allocated rows, of which the first 1080 were image data.
+
+Native Bayer green samples already showed broad, soft static edges. Reducing
+exposure from approximately 80 ms (4227 lines) to 10 ms (528 lines), with the
+same sensor analogue gain (`0x0157 = 0xe3`) and unity digital gain, did not
+restore those edges. Display normalization was used to compare the darker raw
+frame; no denoising or sharpening was applied. Before manual focus adjustment,
+these results made optical focus/path the leading cause of softness, rather
+than JPEG compression, ISP denoising or motion blur alone. Automatic ISP
+capture was restored after the temporary raw/exposure tests.
+
+The owner confirmed there is no protective film and then manually adjusted
+the lens. Letter and object outlines improved, but fine text remained soft
+and shadow regions showed colour noise. The camera pose also changed, so
+focus scores from the old and new views cannot quantify the improvement.
+Three consecutive sensor-register samples after focusing reported 1920x1080,
+no binning, 4756 exposure lines, a 3448-pixel line length, analogue gain
+`0x0157 = 0xe7` (10.24x), and unity digital gain. At the driver's nominal
+182 MHz pixel clock, this corresponds to approximately 90 ms exposure.
+
+This is the best manual focus found under the current lighting and ISP
+settings, not an established hardware resolution limit. A same-scene,
+post-focus RAW/ISP comparison under stronger illumination and lower gain is
+still needed to distinguish remaining optical softness from noise and ISP
+detail processing. The pre-focus RAW result does not rule out an ISP
+contribution after the lens has been adjusted.
 
 ## Next integration step
 
