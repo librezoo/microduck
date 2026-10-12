@@ -67,9 +67,12 @@ snapshot script, set `MICRODUCK_AWISP_ROOT` to that directory's
 
 ## Capture and validation
 
-The snapshot command captures 300 frames of 640x480 NV12, allowing roughly
-10 seconds for exposure and white balance to settle, and saves the last JPEG.
-The sensor remains in 1920x1080 mode; the output is scaled by the capture path.
+The snapshot command captures 300 frames of 1920x1080 NV12 and saves the last
+JPEG at quality 95. Allow roughly 10–30 seconds as exposure and white
+balance settle: indoor AE can extend the sensor frame interval beyond the
+requested 30 fps. The 45-second timeout includes that slower capture and startup.
+The output now matches the sensor's 1920x1080 mode; the first bring-up script
+downscaled it to 640x480, discarding detail and changing the aspect ratio.
 It retains full colour, uses automatic exposure, and avoids competing manual
 I2C writes. Its timeout bounds a stalled capture, and a lock prevents concurrent
 instances of this snapshot command. Other camera applications must also release
