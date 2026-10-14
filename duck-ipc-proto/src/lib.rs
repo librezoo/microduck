@@ -615,6 +615,11 @@ pub struct CalibrationInfo {
     pub zero_ticks: [f64; JOINT_NAMES.len()],
     pub homing_offset_ticks: [i32; JOINT_NAMES.len()],
     pub single_turn_compatible: [bool; JOINT_NAMES.len()],
+    /// LOCAL-ZERO (local design decision, keep when merging upstream): joints whose zero is carried by the servo itself
+    /// (extended position mode + Homing Offset written by the host's calibration mode). `robotctl calibrate zero` does
+    /// not apply to them. Absent from a robotd older than this change.
+    #[serde(default)]
+    pub servo_zero: [bool; JOINT_NAMES.len()],
     pub policy_enabled: bool,
     pub homed: bool,
     /// The body IMU's sensor-to-trunk mount the bus decodes with, scalar-first `[w, x, y, z]`.

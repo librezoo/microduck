@@ -29,6 +29,8 @@ pub struct HardwareCalibrationInfo {
     pub zero_ticks: [f64; NUM_JOINTS],
     pub homing_offset_ticks: [i32; NUM_JOINTS],
     pub single_turn_compatible: [bool; NUM_JOINTS],
+    /// LOCAL-ZERO: joints whose zero lives in the servo (extended position mode + Homing Offset), see `bus.rs`.
+    pub servo_zero: [bool; NUM_JOINTS],
 }
 
 #[derive(Debug, Deserialize)]

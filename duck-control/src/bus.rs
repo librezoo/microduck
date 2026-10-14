@@ -137,6 +137,8 @@ pub struct DynamixelIo {
     calibration: JointCalibration,
     homing_offset_ticks: [i32; NUM_JOINTS],
     single_turn_compatible: [bool; NUM_JOINTS],
+    /// LOCAL-ZERO: joints in extended position mode, whose zero is held by the servo (see `check_registers`).
+    servo_zero: [bool; NUM_JOINTS],
     hardware_checked: bool,
     /// Kept so the port can be reopened at the factory baud rate: `rustypot` owns the serial
     /// handle outright and offers no way to change its speed in place.
@@ -169,6 +171,7 @@ impl DynamixelIo {
             calibration: JointCalibration::default(),
             homing_offset_ticks: [0; NUM_JOINTS],
             single_turn_compatible: [false; NUM_JOINTS],
+            servo_zero: [false; NUM_JOINTS],
             hardware_checked: false,
             port: port.to_owned(),
             ids,
@@ -236,6 +239,27 @@ impl DynamixelIo {
                 && (-1024..=1024).contains(&homing_offset)
                 && matches!(min.as_slice(), [value] if (*value + PI).abs() < 1e-9)
                 && matches!(max.as_slice(), [value] if (*value - (PI - crate::calibration::RADIANS_PER_TICK)).abs() < 1e-9);
+            // LOCAL-ZERO — local design decision, KEEP when merging upstream changes; do not overwrite with upstream's
+            // single-turn-only check. The host's calibration mode can write the zero into the servo itself: extended
+            // position mode (4) + a Homing Offset that makes the q=0 fixture read 2048 (mouth closed 1991) + position
+            // limits around the joint's travel. On the XL330s here (firmware 52/53) the offset is applied to Present
+            // Position only in mode 4, at once, and mode, offset and limits survive a power cycle. Such a joint needs
+            // no joint-zero.json entry and its offset and limits belong to the host, not to this check.
+            let servo_zero = model.as_slice() == [1200]
+                && mode.as_slice() == [4]
+                && drive.as_slice() == [0]
+                && matches!((min.as_slice(), max.as_slice()), ([lo], [hi]) if lo < hi);
+            if mode.as_slice() == [4] && !servo_zero {
+                return Err(IoError::Bus(format!(
+                    "ID {id} is in extended position mode but is not an XL330-M288 with drive mode 0 and ordered position limits"
+                )));
+            }
+            if servo_zero && self.calibration.is_configured(joint) {
+                return Err(IoError::Bus(format!(
+                    "ID {id} carries its zero in the servo and also has a saved joint zero; keep only one of them"
+                )));
+            }
+            self.servo_zero[joint] = servo_zero;
             self.homing_offset_ticks[joint] = homing_offset;
             self.single_turn_compatible[joint] = compatible;
             if self.calibration.is_configured(joint)
@@ -303,6 +327,14 @@ impl DynamixelIo {
             .iter()
             .position(|&joint_id| joint_id == id)
             .is_some_and(|joint| self.calibration.is_configured(joint))
+        {
+            return Ok(fixed);
+        }
+        // LOCAL-ZERO (keep when merging upstream): a servo that carries its own zero keeps its offset.
+        if JOINT_IDS
+            .iter()
+            .position(|&joint_id| joint_id == id)
+            .is_some_and(|joint| self.servo_zero[joint])
         {
             return Ok(fixed);
         }
@@ -382,6 +414,20 @@ impl DynamixelIo {
     /// either way, so the caller can keep waiting on it.
     pub fn adopt_replacement(&mut self, id: u8) -> Result<bool> {
         self.calibration.check_replacement(id)?;
+        // LOCAL-ZERO (keep when merging upstream): a new servo arrives in single-turn mode with no zero. Next to servos
+        // that carry theirs it would read and drive off by the difference with nothing to say why, so it is not
+        // flashed here: zero it with the host's calibration mode first.
+        for &other in JOINT_IDS.iter().filter(|&&other| other != id) {
+            let mode = self
+                .controller
+                .read_operating_mode(other)
+                .map_err(|e| IoError::Bus(format!("read mode on {other}: {e}")))?;
+            if mode.as_slice() == [4] {
+                return Err(IoError::Bus(format!(
+                    "ID {id} is missing, but the other joints carry their zero in the servo; zero the replacement with the host's calibration mode before restarting robotd"
+                )));
+            }
+        }
         let name = JOINT_IDS
             .iter()
             .position(|&j| j == id)
@@ -615,6 +661,7 @@ impl RobotIo for DynamixelIo {
             zero_ticks: std::array::from_fn(|joint| self.calibration.zero_tick(joint)),
             homing_offset_ticks: self.homing_offset_ticks,
             single_turn_compatible: self.single_turn_compatible,
+            servo_zero: self.servo_zero,
         })
     }
 

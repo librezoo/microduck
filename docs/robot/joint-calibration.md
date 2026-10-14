@@ -108,3 +108,19 @@ would also change the live position reference and require coordinated changes to
 this file; it is deliberately outside the capture command. EEPROM writes require
 torque OFF. Resolve a multi-turn discontinuity as a separate position-mode and
 mechanical-range problem rather than hiding it in Homing Offset.
+
+## Zero carried by the servo (local addition)
+
+<!-- LOCAL-ZERO — local design decision of this fork. KEEP when merging upstream changes; do not overwrite. -->
+
+Besides `joint-zero.json`, a joint's zero can live in the servo itself. The host tool's calibration mode
+(`mdimu serve`, mode 标定) writes, with the robot in the q=0 fixture: extended position mode (4), a Homing Offset that
+makes the fixture pose read 2048 (mouth closed 1991, −5°), and Min/Max Position Limits around the joint's travel, then
+verifies them after a reboot. On the XL330s used here (firmware 52 and 53) the offset reaches Present Position only in
+mode 4, immediately, and mode, offset and limits survive a power cycle.
+
+`robotd` accepts such a joint (XL330-M288, mode 4, drive mode 0, ordered limits): it keeps the servo's offset and limits
+instead of rewriting the flashing rig's offset, and a joint with both a saved zero and a servo zero is refused at startup.
+`robotctl calibrate zero` refuses while any joint carries its zero in the servo, and a missing servo is not adopted next
+to joints that do, because the new one would have no zero. The limits still refuse goals outside them (error 6), so they
+must stay outside the joint travel of the model.

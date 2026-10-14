@@ -5456,6 +5456,7 @@ fn dispatch(
                     zero_ticks: info.zero_ticks,
                     homing_offset_ticks: info.homing_offset_ticks,
                     single_turn_compatible: info.single_turn_compatible,
+                    servo_zero: info.servo_zero,
                     policy_enabled: state.policy_enabled,
                     homed: state.homed.load(Ordering::Relaxed),
                     body_imu_mount: state.body_imu_mount.get().map(|(mount, _)| *mount),
@@ -6005,6 +6006,7 @@ mod tests {
                 zero_ticks,
                 homing_offset_ticks,
                 single_turn_compatible: [true; NUM_JOINTS],
+                servo_zero: [false; NUM_JOINTS],
             },
         )));
         let response = dispatch(&state, &intents, proto::Id::Number(2), &call);
