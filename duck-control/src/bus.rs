@@ -276,12 +276,95 @@ impl DynamixelIo {
                 )));
             }
         }
+        self.normalise_servo_zero_turns()?;
         let mut fixed = 0;
         for &id in &JOINT_IDS {
             fixed += self.check_registers_of(id)?;
         }
         self.hardware_checked = true;
         Ok(fixed)
+    }
+
+    /// LOCAL-ZERO — local design decision, KEEP when merging upstream changes; do not overwrite.
+    ///
+    /// Put every servo-zero joint's multi-turn counter back into the one-turn window `0..=4095`.
+    ///
+    /// In extended position mode the counter at power-up is the encoder's single-turn value plus the
+    /// Homing Offset, and it then counts continuously. A joint that powers up (or is moved while
+    /// powered) on the other side of the encoder seam from its zero therefore reads a whole turn off,
+    /// whatever the horn's mounting — and the servo refuses every goal outside its position limits,
+    /// which can never reach past 4095 (measured on this robot's XL330s: goal = present is refused
+    /// with status 6 once the counter is above 4095). Moving the counter by whole turns is exactly
+    /// what changing the Homing Offset by 4096 does, at once and without moving the joint, so the
+    /// offset is shifted by the turns found. The zero stays at 2048 and a joint within ±180° of it
+    /// is always inside the window, wherever the seam lies, so no horn has to be mounted at mid-range.
+    ///
+    /// The offset is EEPROM and may only be written with torque off. A joint that is outside the
+    /// window with torque on cannot be fixed here (that is a servo reset in flight): it is refused,
+    /// and `robotd` waits until the robot is relaxed.
+    fn normalise_servo_zero_turns(&mut self) -> Result<()> {
+        for (joint, &id) in JOINT_IDS.iter().enumerate() {
+            if !self.servo_zero[joint] {
+                continue;
+            }
+            let reading = |this: &mut Self| -> Result<f64> {
+                let v = this
+                    .controller
+                    .read_present_position(id)
+                    .map_err(|e| IoError::Bus(format!("read position on {id}: {e}")))?;
+                v.first().copied().ok_or(IoError::ShortRead {
+                    what: "present position",
+                    expected: 1,
+                    got: 0,
+                })
+            };
+            let turns = turns_outside_window(reading(self)?);
+            if turns == 0 {
+                continue;
+            }
+            let torque = self
+                .controller
+                .read_torque_enable(id)
+                .map_err(|e| IoError::Bus(format!("read torque on {id}: {e}")))?;
+            if torque.first() != Some(&false) {
+                return Err(IoError::Bus(format!(
+                    "ID {id} ({}) reads {turns} turn(s) outside its window with torque on; relax the robot (robot.relax) and restart robotd",
+                    JOINT_NAMES[joint]
+                )));
+            }
+            let shifted = self.homing_offset_ticks[joint] - 4096 * turns as i32;
+            tracing::warn!(
+                id,
+                joint = JOINT_NAMES[joint],
+                turns,
+                homing_offset = shifted,
+                "multi-turn counter outside its window; shifting the homing offset by whole turns"
+            );
+            self.controller
+                .write_homing_offset(id, shifted)
+                .map_err(|e| IoError::Bus(format!("write homing_offset on {id}: {e}")))?;
+            std::thread::sleep(EEPROM_SETTLE);
+            if turns_outside_window(reading(self)?) != 0 {
+                return Err(IoError::Bus(format!(
+                    "ID {id} is still outside its window after shifting its homing offset"
+                )));
+            }
+            self.homing_offset_ticks[joint] = shifted;
+        }
+        Ok(())
+    }
+
+    /// LOCAL-ZERO (keep when merging upstream): a servo-zero joint's reading must be inside the
+    /// one-turn window. Outside it the servo has reset in flight or been moved across the seam
+    /// without a normalising pass, and a pose read a turn off would be driven as a different pose.
+    fn checked_model_position(&self, joint: usize, servo_radians: f64) -> Result<f64> {
+        if self.servo_zero[joint] && turns_outside_window(servo_radians) != 0 {
+            return Err(IoError::Bus(format!(
+                "{} reads outside its one-turn window; its servo reset or crossed the encoder seam — relax the robot and restart robotd",
+                JOINT_NAMES[joint]
+            )));
+        }
+        self.calibration.model_position(joint, servo_radians)
     }
 
     /// [`Self::check_registers`] for one servo.
@@ -554,7 +637,7 @@ impl DynamixelIo {
         }
         let mut out = [0.0; NUM_JOINTS];
         for (joint, value) in values.iter().enumerate() {
-            out[joint] = self.calibration.model_position(joint, *value)?;
+            out[joint] = self.checked_model_position(joint, *value)?;
         }
         Ok(out)
     }
@@ -649,6 +732,14 @@ fn open_controller(port: &str, baud: u32, fast_sync_read: bool) -> Result<Xl330C
     Ok(controller.with_serial_port(serial))
 }
 
+/// LOCAL-ZERO (keep when merging upstream): whole turns by which a multi-turn reading lies outside the
+/// one-turn window 0..=4095 ticks, in rustypot's radians (tick 2048 = 0 rad). 0 inside, +1 for 4096..=8191,
+/// −1 for −4096..=−1, and so on.
+pub fn turns_outside_window(servo_radians: f64) -> i64 {
+    let ticks = ((servo_radians + PI) * 4096.0 / (2.0 * PI)).round() as i64;
+    ticks.div_euclid(4096)
+}
+
 /// Which servo a factory-fresh one should become, given the IDs that did not answer.
 ///
 /// Only an unambiguous answer is one: with two servos silent there is no telling which of them
@@ -725,9 +816,8 @@ impl RobotIo for DynamixelIo {
             let velocity = i32::from_le_bytes([block[4], block[5], block[6], block[7]]);
             sensors.velocities[joint] = velocity as f64 * RAD_PER_SEC_PER_COUNT;
             let position = i32::from_le_bytes([block[8], block[9], block[10], block[11]]);
-            sensors.positions[joint] = self
-                .calibration
-                .model_position(joint, (2.0 * PI * position as f64 / 4096.0) - PI)?;
+            sensors.positions[joint] =
+                self.checked_model_position(joint, (2.0 * PI * position as f64 / 4096.0) - PI)?;
         }
 
         Ok(sensors)
@@ -935,6 +1025,29 @@ mod tests {
     /// One silent servo is the only case a swap can be inferred from. With two silent there is
     /// no telling which the fresh servo replaces, and guessing would flash a leg joint as a neck
     /// joint; with none silent a stray fresh servo is nobody's replacement.
+    /// LOCAL-ZERO: the one-turn window of a multi-turn counter, in rustypot's radians (2048 ticks = 0).
+    #[test]
+    fn a_multi_turn_reading_outside_one_turn_is_counted_in_whole_turns() {
+        let rad = |ticks: f64| ticks * 2.0 * PI / 4096.0 - PI;
+        assert_eq!(turns_outside_window(rad(0.0)), 0);
+        assert_eq!(turns_outside_window(rad(2048.0)), 0);
+        assert_eq!(turns_outside_window(rad(4095.0)), 0);
+        assert_eq!(turns_outside_window(rad(4096.0)), 1);
+        assert_eq!(
+            turns_outside_window(rad(5191.0)),
+            1,
+            "ID 13 on the KPower robot"
+        );
+        assert_eq!(
+            turns_outside_window(rad(7416.0)),
+            1,
+            "ID 22, before its reboot"
+        );
+        assert_eq!(turns_outside_window(rad(-1.0)), -1);
+        assert_eq!(turns_outside_window(rad(-4100.0)), -2);
+        assert_eq!(turns_outside_window(rad(8300.0)), 2);
+    }
+
     #[test]
     fn a_replacement_is_inferred_only_from_exactly_one_missing_servo() {
         assert_eq!(replacement_target(&[]), None);
