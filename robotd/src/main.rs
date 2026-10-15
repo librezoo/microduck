@@ -2497,11 +2497,14 @@ async fn control_loop<T: RobotIo>(
     // `robot.state` timestamp by one inference otherwise. It rides the coast: a coasted tick
     // republishes the last fresh sample, so it must republish that sample's read time too.
     let mut sensors_read_ns = 0u64;
+    let mut stage = StageTimes::new();
     while !state.shutdown.load(Ordering::Relaxed) {
         ticker.tick().await;
         let tick_start = Instant::now();
+        stage.tick_start(tick_start);
 
         let read_at = proto::clock::monotonic_ns();
+        let read_t0 = Instant::now();
         let fresh = match safety.read() {
             Ok(sensors) => {
                 state.consecutive_errors.store(0, Ordering::Relaxed);
@@ -2536,6 +2539,10 @@ async fn control_loop<T: RobotIo>(
                 None
             }
         };
+
+        stage.read_end = Some(Instant::now());
+        stage.push("read", read_t0.elapsed());
+        stage.push("tick_start_to_read_end", tick_start.elapsed());
 
         // Coast over a dropped read on the last good sample — see [`COAST_TICKS`]. The
         // distinction between "fresh" and "what the policy steps from" matters twice below:
@@ -3733,7 +3740,14 @@ async fn control_loop<T: RobotIo>(
             }
             (true, Some(sensors)) => {
                 let controller = controller.as_mut().expect("driving implies a controller");
-                match controller.step(sensors, &command, snapshot.pose.active, dt, scale_mult) {
+                if let Some(re) = stage.read_end {
+                    stage.push("read_end_to_step", re.elapsed());
+                }
+                let step_t0 = Instant::now();
+                let step_result =
+                    controller.step(sensors, &command, snapshot.pose.active, dt, scale_mult);
+                stage.push("step", step_t0.elapsed());
+                match step_result {
                     Ok(step) => {
                         policy_generated = true;
                         (
@@ -4069,6 +4083,7 @@ async fn control_loop<T: RobotIo>(
         }
 
         last_targets = targets;
+        let apply_t0 = Instant::now();
         let applied = if policy_generated {
             safety.apply_policy(targets, hold, gain)
         } else {
@@ -4077,6 +4092,10 @@ async fn control_loop<T: RobotIo>(
         match applied {
             Ok(applied) => limits.extend(applied.limits),
             Err(e) => tracing::warn!(error = %e, "bus write failed"),
+        }
+        stage.push("apply", apply_t0.elapsed());
+        if let Some(re) = stage.read_end {
+            stage.push("sensor_to_command_sent", re.elapsed());
         }
 
         vettally.tick(&vetbook::Facts {
@@ -4173,6 +4192,8 @@ async fn control_loop<T: RobotIo>(
         if tick_start.elapsed() > period {
             state.missed.fetch_add(1, Ordering::Relaxed);
         }
+        stage.push("tick_total", tick_start.elapsed());
+        stage.report(Instant::now());
 
         window_ticks += 1;
         let window = window_start.elapsed();
@@ -4347,6 +4368,68 @@ fn limit_name(limit: duck_control::safety::Limit) -> &'static str {
 /// the bus: a transaction issued from the IPC side would interleave bytes with a tick and
 /// corrupt both. The IMU counters come from the same `io`, so they are mirrored here rather
 /// than reached for from the socket.
+/// Per-stage timing of the control tick, for finding where the loop's latency goes. Off unless `ROBOTD_STAGE_TIMING` is set in
+/// robotd's environment; then one line every two seconds (mean / p95 / max, milliseconds). Not a metric anything depends on.
+#[derive(Default)]
+struct StageTimes {
+    on: bool,
+    last_start: Option<Instant>,
+    window: Option<Instant>,
+    read_end: Option<Instant>,
+    samples: std::collections::BTreeMap<&'static str, Vec<f64>>,
+}
+
+impl StageTimes {
+    fn new() -> Self {
+        Self {
+            on: std::env::var_os("ROBOTD_STAGE_TIMING").is_some(),
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, stage: &'static str, d: Duration) {
+        if self.on {
+            self.samples
+                .entry(stage)
+                .or_default()
+                .push(d.as_secs_f64() * 1e3);
+        }
+    }
+
+    fn tick_start(&mut self, now: Instant) {
+        if !self.on {
+            return;
+        }
+        if let Some(prev) = self.last_start.replace(now) {
+            self.push("tick_interval", now - prev);
+        }
+        self.window.get_or_insert(now);
+    }
+
+    fn report(&mut self, now: Instant) {
+        if !self.on || self.window.is_none_or(|w| now - w < Duration::from_secs(2)) {
+            return;
+        }
+        let mut line = String::new();
+        for (name, v) in &mut self.samples {
+            v.sort_by(f64::total_cmp);
+            let n = v.len();
+            if n == 0 {
+                continue;
+            }
+            let mean = v.iter().sum::<f64>() / n as f64;
+            line += &format!(
+                " {name}={mean:.2}/{:.2}/{:.2}",
+                v[(n as f64 * 0.95) as usize % n],
+                v[n - 1]
+            );
+            v.clear();
+        }
+        tracing::warn!("stage timing ms (mean/p95/max):{line}");
+        self.window = Some(now);
+    }
+}
+
 /// Returns this sample's per-joint temperatures, `None` when the bus read missed.
 fn publish_slow_sensors<T: RobotIo>(
     io: &mut Safety<T>,
