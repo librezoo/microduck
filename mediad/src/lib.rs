@@ -39,6 +39,7 @@ pub mod stream;
 /// hole to it. `docs/design/remote-access-design.md` §6.
 pub mod turn;
 pub mod upstream;
+pub mod vetbook;
 pub mod web;
 
 /// The GStreamer pipeline and the datachannel.

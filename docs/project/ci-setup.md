@@ -124,6 +124,7 @@ The second prompts, so the passphrase never lands in shell history or a transcri
 | `MINISIGN_SECRET_KEY` | `release` env | `~/.duck-keys/release-1.key`, both lines | ✅ |
 | `MINISIGN_PASSWORD` | `release` env | the passphrase for `release-1` | ✅ |
 | `MINISIGN_DEV_SECRET_KEY` | **repo** | `~/.duck-keys/team.dev.key` | ✅ |
+| `HOMEBREW_TAP_DEPLOY_KEY` | `homebrew` env | private half of the tap's deploy key | ✅ |
 
 `MINISIGN_DEV_SECRET_KEY` is repo-scoped on purpose: every branch push signs with it, so
 gating it behind an environment would mean the dev workflow declaring one meant for
@@ -223,6 +224,8 @@ _build-release.yml     build · package · sign · verify · publish        (cal
 _promote-release.yml   copy bytes · verify sha · re-sign · retire staging (called)
 promote.yml            workflow_dispatch → _promote-release.yml
 dev.yml                every push: an unsigned-for-customers dev build, `team.dev` key
+_build-duckctl.yml     duckctl wheels + archives per platform           (called by dev.yml, duckctl-pypi.yml)
+duckctl-pypi.yml       tag daemon-v*: duckctl wheels → PyPI, for `uvx duckctl`, then the Homebrew formula
 ```
 
 The recipe lives in the two called workflows so the staging and stable paths cannot drift apart in
@@ -233,6 +236,60 @@ robot.
 Both publish steps create the release only if it is absent and then upload with `--clobber`, so a job
 that failed halfway can be re-run. That was not true before: a release job that died after creating
 its release could only be retried by deleting the release and the tag by hand.
+
+## `duckctl` on PyPI
+
+`uvx duckctl` installs the newest `duckctl` from PyPI. `duckctl-pypi.yml` publishes it on every
+`daemon-v*` tag push: one wheel per platform, holding the binary `_build-duckctl.yml` built, and no
+sdist, so nothing compiles on the user's machine. The wheel's version is the workspace version, and
+the workflow refuses a tag that disagrees with it.
+
+There is no token. PyPI trusts this workflow's OIDC identity, which needs a one-time setup:
+
+1. On PyPI, under the account that will own the project: *Your projects → Publishing → Add a new
+   pending publisher*. Fill in project `duckctl`, owner `pollen-robotics`, repository `microduck`,
+   workflow `duckctl-pypi.yml`, environment `pypi`. The project is created by the first upload.
+2. Here, create a `pypi` environment under Settings → Environments. It holds no secrets; it is what
+   the publisher names, so a different workflow cannot publish as this one.
+Both are done (2026-10-12). The first upload is the first `daemon-v*` tag cut after this workflow
+merged: a tag runs the workflow files *it* contains, so a release from before then cannot be
+published by dispatching from it — it has neither this workflow nor `duckctl/pyproject.toml`.
+
+A **manual promotion** (`gh workflow run promote`) needs one more step:
+`gh workflow run duckctl-pypi --ref daemon-v<version>`. That path creates the stable tag with
+`GITHUB_TOKEN`, and GitHub does not start workflows on a push made with it, so the tag alone
+publishes nothing. Re-running is safe: files PyPI already has are skipped.
+
+## `duckctl` on Homebrew
+
+`brew install pierre-rouanet/tools/duckctl` installs the same binary as PyPI's wheels. After a
+publish, `duckctl-pypi.yml`'s `homebrew` job renders the formula for that version with
+`scripts/homebrew-formula.py` and pushes it to the tap. The tap's `Formula/duckctl.rb` is output:
+an edit made there is overwritten by the next release, so change the script instead.
+
+The push uses a deploy key on `pierre-rouanet/homebrew-tools` with write access, which can reach
+that repository and nothing else. Its private half is `HOMEBREW_TAP_DEPLOY_KEY` in a `homebrew`
+environment that holds nothing else. Done 2026-10-15. To replace it:
+
+```bash
+ssh-keygen -t ed25519 -N '' -C microduck-ci -f tap-key
+```
+
+```bash
+gh repo deploy-key add tap-key.pub -R pierre-rouanet/homebrew-tools -w -t microduck-ci
+```
+
+```bash
+gh secret set HOMEBREW_TAP_DEPLOY_KEY --env homebrew < tap-key
+```
+
+```bash
+rm tap-key tap-key.pub
+```
+
+Then remove the old key under the tap's Settings → Deploy keys. A job that ran after PyPI but
+failed to push is safe to re-run: the formula is rendered whole, and a tap that already has the
+version is left alone.
 
 ## Rotating a key
 

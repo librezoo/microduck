@@ -957,9 +957,31 @@ A TOML file read at startup and, for the most part, **not watched**. It lives ou
 `/etc/robot/robotd.toml`.
 
 Two parts of it are watched, and both are exceptions earned by what a restart would cost rather
-than steps towards watching the whole file. `padd` stats the file once a second and re-reads
-`[pad]`, `[pad_imu_head_control]` and `[pad_drive]` when the mtime moves: a binding is changed from a phone, and restarting
-`padd` to apply it would drop the pad session and let `robotd`'s deadman zero a walking robot.
+than steps towards watching the whole file. Whichever pad daemon runs — `padd`, or `netpadd`
+for the pad over UDP — stats the file once a second and re-reads the controller sections
+(`[pad]`, `[pad_imu_head_control]`, `[pad_drive]`, `[pad_axes]`, `[pad_head]`, `[pad_body]` and
+`[pad_roller]`) when the mtime moves: a binding is changed from a phone, and restarting the
+daemon to apply it would drop the pad session and let `robotd`'s deadman zero a walking robot.
+Both read them through `pad-map`'s `Config::reload`, so the two cannot map a pad differently.
+The sections are replaced together after validation; a failed live read keeps the mapping in
+use. At startup, a missing or invalid file uses the built-in defaults.
+
+`[pad_axes]` selects logical gilrs axes (`left_x`, `left_y`, `right_x`, `right_y`, `none`) for
+robot commands, separately for `drive`, `head`, `head_drive` and `body_pose`. Each binding has
+`source`, `invert` and a nonnegative `gain`; omitted fields inherit the mode's shipped binding,
+including its sign. Values below `deadzone` are zeroed without rescaling the remaining travel,
+then inverted, multiplied by gain, clamped to ±1, and scaled to physical command limits.
+`none` or gain zero disables a binding. Limits live in `[pad_drive]` (walking m/s and rad/s),
+`[pad_roller]` (the same on wheels), `[pad_head]` (per-joint radians) and `[pad_body]` (height metres
+and tilt radians). Defaults reproduce the previous commands, including asymmetric crouch and
+roller push/brake. These are requested commands, not actuator limits or guarantees that a policy
+can reach the requested pose.
+
+D-pad mode selection and Start/Select holds remain fixed. With IMU head control active,
+`head_drive` uses the `drive` stick bindings while tilt drives the head through `[pad_head]` limits.
+Smoothing remains in `robotd`'s `[control]` settings. `--deadzone` and `--max-head`, on either
+daemon, override the corresponding file settings for bench use.
+
 `robotd` re-reads `[policy]` — all of it but `mode` and `enabled` — when asked to, which is how
 `robotctl policy add` lands a skill without taking motor control away from a standing robot.
 Re-reading `[safety]` or `[control]` under a running loop is a different and much larger promise,
@@ -1019,7 +1041,7 @@ arithmetic, it was that nothing read the answer.
 
 ### 4.5 What else the loop drives, and why none of it has a design page
 
-`robotd` grew four subsystems after slice 2 that are not control and not safety. They share a
+`robotd` grew five subsystems after slice 2 that are not control and not safety. They share a
 shape: each hangs off the tick, none may block it, and none can reach the bus except through the
 intents the loop already arbitrates.
 
@@ -1030,6 +1052,7 @@ intents the loop already arbitrates.
 | `theremin.rs` | depth from `tofd` at 15 Hz → a note, a mouth opening, and a line of state, sampled by the 50 Hz loop and never waited on | the module header |
 | `chorale.rs` | several ducks singing one piece: the lowest id conducts, the conductor owns the seating, `btd` carries the beacons and does no thinking | the module header |
 | `pet-detect/` | a ~20 KB CNN over a 40-band log-mel window from the onboard mic, in its own worker | the crate header |
+| `vetbook.rs` | the robot's lifetime record: a tally the tick adds to without a lock, handed to the shared book once a second with `try_lock`, saved atomically once a minute; plus a 1-byte read of each servo's latched alerts every 10 s | the module header, and `duck_ipc_proto::vetbook` for the record |
 
 Plus `soc.rs`, which reads the board's own thermal zones and clock ceiling out of `sysfs` — not
 behind `RobotIo`, because it has to keep answering when the motor bus does not.

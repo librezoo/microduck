@@ -76,6 +76,12 @@ fn torque_enable_readback(blocks: &[Vec<u8>]) -> Option<[bool; NUM_JOINTS]> {
     }
     Some(states)
 }
+/// `hardware_error_status`, one byte — see [`RobotIo::hardware_errors`].
+const HARDWARE_ERROR_ADDR: u8 = 70;
+
+/// `model_number` (0, `u16`) through `firmware_version` (6, `u8`): seven bytes, once a start.
+const IDENTITY_ADDR: u8 = 0;
+const IDENTITY_LEN: u8 = 7;
 
 /// `present_input_voltage` counts 0.1 V each.
 const VOLTS_PER_COUNT: f64 = 0.1;
@@ -848,6 +854,49 @@ impl RobotIo for DynamixelIo {
 
     fn imu_stale(&self) -> ImuStale {
         self.stale_imu.stale
+    }
+
+    fn hardware_errors(&mut self) -> Result<Option<[u8; NUM_JOINTS]>> {
+        let blocks = self
+            .controller
+            .sync_read_raw_data(&JOINT_IDS, HARDWARE_ERROR_ADDR, 1)
+            .map_err(|e| IoError::Bus(format!("hardware_error_status sync_read: {e}")))?;
+        if blocks.len() != NUM_JOINTS {
+            return Err(IoError::ShortRead {
+                what: "hardware error blocks",
+                expected: NUM_JOINTS,
+                got: blocks.len(),
+            });
+        }
+        let mut errors = [0u8; NUM_JOINTS];
+        for (slot, block) in errors.iter_mut().zip(&blocks) {
+            *slot = block.first().copied().unwrap_or(0);
+        }
+        Ok(Some(errors))
+    }
+
+    fn servo_identity(&mut self) -> Result<Option<[crate::io::ServoIdentity; NUM_JOINTS]>> {
+        let blocks = self
+            .controller
+            .sync_read_raw_data(&JOINT_IDS, IDENTITY_ADDR, IDENTITY_LEN)
+            .map_err(|e| IoError::Bus(format!("model/firmware sync_read: {e}")))?;
+        if blocks.len() != NUM_JOINTS {
+            return Err(IoError::ShortRead {
+                what: "identity blocks",
+                expected: NUM_JOINTS,
+                got: blocks.len(),
+            });
+        }
+        let mut ids = [crate::io::ServoIdentity::default(); NUM_JOINTS];
+        for (slot, block) in ids.iter_mut().zip(&blocks) {
+            if block.len() == IDENTITY_LEN as usize {
+                *slot = crate::io::ServoIdentity {
+                    model: u16::from_le_bytes([block[0], block[1]]),
+                    firmware: block[6],
+                };
+            }
+        }
+        Ok(Some(ids))
     }
 
     fn imu_ready(&self) -> bool {

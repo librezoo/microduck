@@ -33,7 +33,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  publish:
+  daemon:
     # Not in a fork. A contributor's push runs this in their fork, where the dev key does not
     # exist, so every run ended red at the signing step — a failure that says nothing about the
     # change and hides one that does. `ci.yml` on the pull request is what checks their work.
@@ -42,6 +42,9 @@ jobs:
     # only, so the dev key is empty, and a version bump is nothing anyone installs on a board.
     if: ${{ !github.event.repository.fork && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -134,6 +137,9 @@ jobs:
           # anyone drives the robot from, and the intent API only stays honest if the
           # thing exercising it daily is actually on the robot.
           cp target/aarch64-unknown-linux-gnu/release/padd staged/
+          # netpadd is the same intent client fed by UDP instead of Bluetooth. Its unit is enabled
+          # beside padd's and an ExecCondition on `[netpad] enabled` picks which of the two runs.
+          cp target/aarch64-unknown-linux-gnu/release/netpadd staged/
           # mediad is the WebRTC gateway. Shipped so a board *can* run it; its unit has no
           # [Install], so nothing starts it until someone does. See mediad/systemd/mediad.service.
           cp target/aarch64-unknown-linux-gnu/release/mediad staged/
@@ -186,6 +192,8 @@ jobs:
             --include "btd/systemd/sysusers.d/btd.conf=systemd/sysusers.d/btd.conf" \
             --include "padd/systemd/padd.service=systemd/padd.service" \
             --include "padd/systemd/sysusers.d/padd.conf=systemd/sysusers.d/padd.conf" \
+            --include "netpadd/systemd/netpadd.service=systemd/netpadd.service" \
+            --include "netpadd/systemd/sysusers.d/netpadd.conf=systemd/sysusers.d/netpadd.conf" \
             --include "mediad/systemd/mediad.service=systemd/mediad.service" \
             --include "mediad/systemd/sysusers.d/mediad.conf=systemd/sysusers.d/mediad.conf" \
             --include "showd/systemd/showd.service=systemd/showd.service" \
@@ -228,6 +236,37 @@ jobs:
           cargo run -p xtask -- sign --dir dist --key "$RUNNER_TEMP/dev.key"
           shred -u "$RUNNER_TEMP/dev.key" 2>/dev/null || rm -f "$RUNNER_TEMP/dev.key"
 
+      # Handed to `publish`, which waits for the `duckctl` builds too before the release exists.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # `duckctl`, the laptop-side tool, for the machines people reach a duck from, so a branch's client
+  # is a download (`scripts/install-duckctl.sh <branch>`) rather than a Rust toolchain. Published on
+  # the same release as the daemon: the updater fetches assets by exact name
+  # (`updater/src/source/github.rs`), so these sit beside the board's files without being seen.
+  # The build itself, and why it goes through a wheel, is `_build-duckctl.yml`; the wheels land on
+  # the release too, so a branch's build is `uv tool install <wheel url>` away.
+  duckctl:
+    if: ${{ !github.event.repository.fork && github.actor != 'dependabot[bot]' }}
+    uses: ./.github/workflows/_build-duckctl.yml
+
+  # One release per branch, created once everything is built: the delete-then-create below would
+  # otherwise race a separate upload away. Only the daemon is required. A `duckctl` build that
+  # fails leaves its file out and the run red, but never holds back the build boards install.
+  publish:
+    needs: [daemon, duckctl]
+    if: ${{ !cancelled() && needs.daemon.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       # The tag moves; the version inside never repeats. That is what makes `--ref` mean
       # "whatever this branch last built" while every build stays individually addressable by
       # `--version`.
@@ -238,14 +277,15 @@ jobs:
       - name: Publish the moving per-branch prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          tag="${{ steps.v.outputs.tag }}"
+          tag="${{ needs.daemon.outputs.tag }}"
           gh release delete "$tag" --yes --cleanup-tag 2>/dev/null || true
 
           gh release create "$tag" \
             --prerelease \
             --target "${GITHUB_SHA}" \
-            --title "daemon ${{ steps.v.outputs.version }} (${GITHUB_REF_NAME})" \
+            --title "daemon ${{ needs.daemon.outputs.version }} (${GITHUB_REF_NAME})" \
             --notes "Dev build of \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`.
 
           Install on a **dev board**:
@@ -257,6 +297,14 @@ jobs:
           Signed with \`team.dev\`, so a customer robot refuses it. The board needs
           \`team.dev.pub\` in its trusted keys and \`allow_dev_keys = true\` — see
           docs/deploy.md.
+
+          \`duckctl\` from this branch, on Linux or macOS:
+
+          \`\`\`
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/scripts/install-duckctl.sh | sh -s -- ${GITHUB_REF_NAME}
+          \`\`\`
+
+          On Windows, \`duckctl-windows-x86_64.zip\` below — docs/robot/duckctl.md has the steps.
 
           This tag moves on every push to the branch; the version inside does not.
           " \

@@ -1,0 +1,64 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* notebook */
+.notebook { background: #fff7ec; color: #5b4148; }
+.notebook::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(#f2d9c9 1px, transparent 1px), linear-gradient(90deg, #f2d9c9 1px, transparent 1px); background-size: 30px 30px; opacity: .6; }
+.notebook { --cover: #ffd9e1; --title: #e2506e; --shadow: #f3b8c6; }
+.notebook.pal1 { --cover: #d4f3e6; --title: #2f9a8a; --shadow: #a9dfc8; }
+.notebook.pal2 { --cover: #e6dcff; --title: #7656dc; --shadow: #cdbcf5; }
+.notebook.pal3 { --cover: #ffe2c8; --title: #e5862a; --shadow: #f5c79d; }
+.notebook .cover { position: absolute; left: 0; top: 0; bottom: 0; width: 470px; background: var(--cover); border-right: 4px dashed #fff; }
+.notebook .cover::after { content: ""; position: absolute; inset: 0; background: radial-gradient(#fff 2.5px, transparent 3px) 0 0 / 26px 26px; opacity: .7; }
+.notebook .title { position: absolute; left: 40px; top: 34px; z-index: 2; }
+.notebook .title b { font: 400 46px "Mochiy Pop One"; color: var(--title); display: block; line-height: 1.1; }
+.notebook .title span { font: 700 19px "Zen Maru Gothic"; color: #9a6a76; letter-spacing: .12em; }
+.notebook .photo { position: absolute; left: 50px; top: 150px; width: 370px; height: 290px; background: #fff; border-radius: 18px; box-shadow: 0 8px 0 var(--shadow); z-index: 2; transform: rotate(-2.5deg); }
+.notebook .photo .sticker { width: 330px; left: 20px; top: 26px; }
+.notebook .tape { position: absolute; width: 120px; height: 34px; background: repeating-linear-gradient(45deg, #b9e4d6cc 0 10px, #d6f1e8cc 10px 20px); z-index: 3; border-radius: 3px; }
+.notebook .name { position: absolute; left: 40px; right: 760px; top: 478px; z-index: 2; }
+.notebook .name b { font: 400 40px/1.1 "Mochiy Pop One"; color: #5b4148; display: block; white-space: nowrap; }
+.notebook .name span { font: 700 20px "Zen Maru Gothic"; color: #9a6a76; white-space: nowrap; }
+.notebook .stats { position: absolute; left: 506px; right: 40px; top: 40px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; z-index: 2; }
+.notebook .s { background: #fff; border-radius: 20px; padding: 10px 14px 8px; box-shadow: 0 5px 0 var(--sh, #f3d3c0); border: 3px solid var(--bd, #ffe2d0); min-width: 0; }
+.notebook .s i { font-style: normal; display: block; font: 700 14px "Zen Maru Gothic"; color: #b0868f; white-space: nowrap; }
+.notebook .s i em { font-style: normal; color: var(--ac, #e2506e); font-size: 16px; margin-right: 6px; }
+.notebook .s b { font: 400 34px/1.15 "Mochiy Pop One"; color: #5b4148; white-space: nowrap; display: block; overflow: hidden; text-overflow: ellipsis; }
+.notebook .s b.word { font-size: 21px; line-height: 1.9; }
+.notebook .s b small { font: 700 19px "Zen Maru Gothic"; color: #b0868f; margin-left: 3px; }
+.notebook .s b small.unit { font: 400 20px "Mochiy Pop One"; }
+.notebook .memo { position: absolute; left: 510px; right: 260px; top: 440px; z-index: 2; background: #fffbe0; border-radius: 6px; padding: 14px 18px; font: 700 18px/1.55 "Zen Maru Gothic"; color: #6b5a4b; box-shadow: 0 4px 0 #efe2a6; transform: rotate(.8deg); }
+.notebook .memo b { font-family: "Mochiy Pop One"; font-weight: 400; color: #e2506e; }
+.notebook .hanko { position: absolute; right: 54px; top: 404px; width: 172px; height: 172px; border-radius: 50%; border: 7px solid var(--ink); color: var(--ink); display: grid; place-items: center; text-align: center; transform: rotate(-12deg); z-index: 2; opacity: .9; box-shadow: inset 0 0 0 4px #fff7ec, inset 0 0 0 7px var(--ink); }
+.notebook .hanko b { font: 400 50px/1 "Mochiy Pop One"; display: block; }
+.notebook .hanko span { font: 700 14px "Zen Maru Gothic"; letter-spacing: .08em; }
+.notebook .foot { position: absolute; right: 44px; bottom: 14px; font: 700 14px "Zen Maru Gothic"; color: #c9a3ab; z-index: 2; }
+{% endblock %}
+{% block card %}
+  <div class="cover"></div>
+  <div class="title"><b>Health Book</b><span>for microducks ♡</span></div>
+  <div class="photo"><img class="sticker" src="{{ sticker }}" alt=""></div>
+  <div class="tape" style="left:44px;top:138px;transform:rotate(-24deg)"></div>
+  <div class="tape" style="left:330px;top:420px;transform:rotate(-18deg)"></div>
+  <div class="name"><b class="fit">{{ c.robot }}</b><span>@{{ c.owner }}'s microduck · day {{ c.day }}</span></div>
+  <div class="stats">
+    <div class="s"><i><em>♡</em>walked</i><b>{{ c.walked }}<small>{{ c.walked_unit }}</small></b></div>
+    <div class="s" style="--ac:#3fae8f;--bd:#d4f1e6;--sh:#bfe6d6"><i><em>☀</em>awake</i><b>{{ c.awake.split()[0] }}<small>{{ c.awake.split()[1] }}</small></b></div>
+    <div class="s" style="--ac:#8e6ad8;--bd:#e6dcff;--sh:#d4c6f7"><i><em>✿</em>oopsie falls</i><b>{{ c.falls }}</b></div>
+    <div class="s" style="--ac:#f08a3a;--bd:#ffe6cc;--sh:#f7d2ad"><i><em>♡</em>cuddles</i><b>{{ c.cuddles }}</b></div>
+    <div class="s"><i><em>♡</em>pets</i><b>{{ c.pets }}</b></div>
+    <div class="s" style="--ac:#3f9ad8;--bd:#d6ecfb;--sh:#bfdcf3"><i><em>★</em>favourite trick</i><b class="word fit">{{ c.favourite or "none yet" }}</b></div>
+    <div class="s" style="--ac:#8e6ad8;--bd:#e6dcff;--sh:#d4c6f7"><i><em>↻</em>spins</i><b>{{ c.spins }}</b></div>
+    <div class="s" style="--ac:#3fae8f;--bd:#d4f1e6;--sh:#bfe6d6"><i><em>♪</em>songs</i><b>{{ c.songs }}</b></div>
+    <div class="s" style="--ac:#e2506e"><i><em>♡</em>carried</i><b>{{ c.carried.split()[0] }}<small>{{ c.carried.split()[1] }}</small></b></div>
+    <div class="s" style="--ac:#f08a3a;--bd:#ffe6cc;--sh:#f7d2ad"><i><em>✚</em>new servos</i><b>{{ c.servos_replaced }}</b></div>
+    <div class="s"><i><em>☀</em>hottest servo</i><b>{{ c.hottest }}<small class="unit">°C</small></b></div>
+    <div class="s" style="--ac:#3fae8f;--bd:#d4f1e6;--sh:#bfe6d6"><i><em>★</em>updates</i><b>{{ c.updates }}</b></div>
+  </div>
+  <div class="memo"><b>memo</b> · {% if c.facts %}{{ c.facts[:2]|join(" · ") }}.{% else %}{{ c.memo }}{% endif %}</div>
+  <div class="hanko" style="--ink:{{ c.status.ink }}"><div><b class="stamp-word" style="font-size:{{ 50 if c.status.stamp|length <= 3 else (38 if c.status.stamp|length <= 4 else 28) }}px">{{ c.status.stamp }}</b><span>{{ c.status.stamp_sub }}</span></div></div>
+  {% for b in c.badges[:3] %}
+  {{ m.badge(b, 74, [-8, 9, -4][loop.index0], ["left:318px;top:366px", "left:392px;top:288px", "left:236px;top:398px"][loop.index0]) }}
+  {% endfor %}
+  <div class="foot">hf.co/datasets/{{ c.dataset }}</div>
+{% endblock %}

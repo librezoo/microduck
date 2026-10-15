@@ -1,0 +1,38 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* polaroid: a scrapbook page — the photo taped on, a handwritten caption, sticky notes with the
+   facts, and the badges stuck around it */
+.polaroid { --paper: #fdf6ec; --dot: #f0d9c8; --wash: #ffd1e1; --note: #fff4a8; --note2: #cdeefd; color: #4a3a3e; background: var(--paper); }
+.polaroid.pal1 { --paper: #f2faf6; --dot: #cfe6da; --wash: #c9f0dc; --note: #ffe0ef; --note2: #fff4a8; }
+.polaroid.pal2 { --paper: #f7f4fd; --dot: #ddd4f2; --wash: #e1d6ff; --note: #d8f6e7; --note2: #ffe7c7; }
+.polaroid.pal3 { --paper: #fffaf0; --dot: #f2e1bf; --wash: #ffe7a6; --note: #ffd6e5; --note2: #d6ecff; }
+.polaroid::before { content: ""; position: absolute; inset: 0; background: radial-gradient(var(--dot) 2.5px, transparent 3px) 0 0 / 28px 28px; }
+.polaroid .photo { position: absolute; left: 70px; top: 46px; width: 430px; height: 520px; background: #fff; padding: 22px 22px 0; box-shadow: 0 12px 30px #0003; transform: rotate(-4deg); }
+.polaroid .shot { width: 100%; height: 386px; background: linear-gradient(160deg, var(--wash), #fff); display: grid; place-items: center; overflow: hidden; }
+.polaroid .shot .sticker { position: relative; width: 360px; }
+.polaroid .caption { font: 700 40px/1.1 "Caveat", cursive; text-align: center; margin-top: 18px; white-space: nowrap; }
+.polaroid .tape { position: absolute; width: 150px; height: 40px; background: repeating-linear-gradient(45deg, #ffffffaa 0 10px, #ffffff55 10px 20px), var(--wash); opacity: .9; z-index: 3; }
+.polaroid .note { position: absolute; width: 270px; padding: 20px 22px; font: 700 30px/1.15 "Caveat", cursive; box-shadow: 0 8px 18px #0002; transform: rotate(var(--r)); background: var(--bgc); }
+.polaroid .note small { display: block; font: 700 15px "Zen Maru Gothic"; opacity: .6; margin-bottom: 4px; }
+.polaroid .title { position: absolute; left: 560px; top: 38px; font: 400 40px "Mochiy Pop One"; color: #e2506e; }
+.polaroid .title small { display: block; font: 700 18px "Zen Maru Gothic"; color: #8a7a7e; }
+.polaroid .doodle { position: absolute; font: 700 44px "Caveat"; color: #e2506e; }
+{% endblock %}
+{% block card %}
+  <div class="photo">
+    <div class="shot"><img class="sticker" src="{{ sticker }}" alt=""></div>
+    <div class="caption fit">{{ c.robot }}, day {{ c.day }} ♡</div>
+  </div>
+  <div class="tape" style="left:200px;top:22px;transform:rotate(-8deg)"></div>
+  <div class="tape" style="left:400px;top:520px;transform:rotate(-30deg)"></div>
+  <div class="title">{{ c.status.title|lower }}<small>@{{ c.owner }}'s microduck · {{ c.personality }}</small></div>
+  <div class="note" style="left:560px;top:140px;--r:3deg;--bgc:var(--note)"><small>walked</small>{{ c.walked }} {{ c.walked_unit }}{% if c.facts %}, {{ c.facts[0] }}{% endif %}</div>
+  <div class="note" style="left:870px;top:150px;--r:-4deg;--bgc:var(--note2);width:270px"><small>cuddles &amp; pets</small>{{ c.cuddles }} cuddles, {{ c.pets }} pets{% if c.facts|length > 1 %}<br>{{ c.facts[1] }}{% endif %}</div>
+  <div class="note" style="left:600px;top:390px;--r:-2deg;--bgc:#fff;width:250px"><small>oopsies</small>{{ c.falls }} falls{% if c.favourite %}<br>loves {{ c.favourite }}{% endif %}</div>
+  {% for b in c.badges[:3] %}
+  {{ m.badge(b, 80, [8, -6, 5][loop.index0], ["left:900px;top:400px", "left:1020px;top:430px", "left:452px;top:470px"][loop.index0]) }}
+  {% endfor %}
+  <div class="doodle" style="left:520px;top:300px;transform:rotate(-12deg)">✿</div>
+  <div class="doodle" style="left:1110px;top:60px;transform:rotate(10deg)">♡</div>
+{% endblock %}

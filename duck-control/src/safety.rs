@@ -199,6 +199,16 @@ impl<T: RobotIo> Safety<T> {
         self.io.imu_ready()
     }
 
+    pub fn hardware_errors(&mut self) -> Result<Option<[u8; crate::model::NUM_JOINTS]>, IoError> {
+        self.io.hardware_errors()
+    }
+
+    pub fn servo_identity(
+        &mut self,
+    ) -> Result<Option<[crate::io::ServoIdentity; crate::model::NUM_JOINTS]>, IoError> {
+        self.io.servo_identity()
+    }
+
     pub fn fallen(&self) -> bool {
         self.fallen
     }

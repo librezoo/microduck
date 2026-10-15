@@ -1,0 +1,36 @@
+# `duckctl` as a Python package, so that `uvx duckctl` runs it on any machine with `uv`.
+#
+# There is no Python in it. maturin's `bin` bindings put the Rust binary in a wheel's scripts, one
+# wheel per platform, and pip or uv installs it on the PATH like any console script. PyPI is the
+# distribution channel, not the language: it is the one index every laptop already reaches, and
+# `uvx` gives a cached, isolated, versioned install with no toolchain and no curl-pipe-sh.
+#
+# The version is Cargo's (the workspace version), so a wheel is always the release it was built
+# from. `.github/workflows/duckctl-pypi.yml` publishes on every stable release tag and refuses a
+# tag that disagrees with it.
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "duckctl"
+dynamic = ["version"]
+description = "Talk to a Microduck robot from a laptop — over Bluetooth LE, no network needed"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.8"
+# Only names from the trove-classifiers list: PyPI refuses an upload carrying any other, and
+# `_build-duckctl.yml` checks them on every push so a bad one fails a branch rather than a release.
+classifiers = [
+    "Programming Language :: Rust",
+    "Environment :: Console",
+    "Topic :: System :: Hardware",
+]
+
+[project.urls]
+Repository = "https://github.com/pollen-robotics/microduck"
+Documentation = "https://github.com/pollen-robotics/microduck/blob/main/docs/robot/duckctl.md"
+
+[tool.maturin]
+bindings = "bin"
+strip = true

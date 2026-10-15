@@ -27,6 +27,8 @@ robotd-params = { path = "../robotd-params" }
 # account has nothing to do with updating one and every other robot wants the same thing.
 # `src/account.rs` is what is left here: where the credential lives on *this* robot, and how the
 # crate's answers become `proto`'s.
+# `vetbook.share` commits files to the Hub, which takes them base64-encoded.
+base64 = "0.22"
 hf-robot-account = "0.1"
 # For `ETXTBSY` by name in the hook-spawn retry. Already in the tree via tokio, and an errno
 # spelled 26 in our own source is the kind of thing that is fine until it is not.

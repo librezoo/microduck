@@ -1,0 +1,116 @@
+# `duckctl` on PyPI, so `uvx duckctl` runs the latest release on any machine with `uv`.
+#
+# On a stable release tag only, `daemon-vX.Y.Z`, the same tag `release.yml` builds or promotes the
+# daemon from: a PyPI version is permanent and is what everyone gets by default, so it follows the
+# releases rather than the branches. A branch's client is on its `daemon-dev-<branch>` prerelease
+# (`dev.yml`). Staging tags are not published; the stable tag that promotes them is.
+#
+# Wheels only, no sdist. A wheel is the binary CI built (`_build-duckctl.yml`), so nothing is ever
+# compiled on the user's machine; a platform with no wheel gets uv's "no matching distribution"
+# rather than a silent Rust build that needs a toolchain it does not have.
+#
+# Trusted publishing: PyPI accepts this workflow's OIDC token, so there is no API token in the repo
+# secrets. It needs a publisher on PyPI naming this repository, this file and the `pypi`
+# environment — `docs/project/ci-setup.md` has the one-time setup.
+#
+# Then the Homebrew tap, `pierre-rouanet/homebrew-tools`, gets the formula for the version just
+# published (`scripts/homebrew-formula.py`), so `brew upgrade duckctl` follows the releases. It
+# pushes with a deploy key that can write to the tap and nothing else, held by the `homebrew`
+# environment — `docs/project/ci-setup.md` has the one-time setup.
+#
+# `workflow_dispatch` is for a tag a manual promotion created, which starts no workflow, or a run to
+# repeat: start it from the tag (Use workflow from → Tags → `daemon-vX.Y.Z`).
+name: duckctl to PyPI
+
+on:
+  push:
+    tags:
+      - 'daemon-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: duckctl-pypi-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # The wheel's version is Cargo's, so a tag that disagrees with Cargo.toml would publish a version
+  # nobody released. `xtask package` refuses the same mistake for the daemon; this refuses it here,
+  # before anything is built.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag is the crate version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$TAG" in
+              daemon-v*) ;;
+              *) echo "::error::run this from a daemon-vX.Y.Z tag, not '$TAG'"; exit 1 ;;
+          esac
+          crate="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "duckctl"))')"
+          if [ "${TAG#daemon-v}" != "$crate" ]; then
+              echo "::error::$TAG but duckctl is $crate in Cargo.toml"
+              exit 1
+          fi
+          echo "publishing duckctl $crate" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  build:
+    needs: check
+    uses: ./.github/workflows/_build-duckctl.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/duckctl
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: duckctl-wheel-*
+          path: wheels
+          merge-multiple: true
+      - run: ls -l wheels
+      # `skip-existing`, so re-running a release whose upload half-failed finishes it rather than
+      # failing on the files PyPI already has (it never accepts the same file twice).
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: wheels
+          skip-existing: true
+
+  homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: homebrew
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push the formula to the tap
+        env:
+          TAG: ${{ github.ref_name }}
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          set -eu
+          version="${TAG#daemon-v}"
+          key="$RUNNER_TEMP/tap-key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          chmod 600 "$key"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:pierre-rouanet/homebrew-tools.git "$RUNNER_TEMP/tap"
+          scripts/homebrew-formula.py "$version" > "$RUNNER_TEMP/tap/Formula/duckctl.rb"
+          cd "$RUNNER_TEMP/tap"
+          if git diff --quiet; then
+              echo "the tap already has duckctl $version" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "duckctl $version" -m "From $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git push -q origin HEAD
+          echo "pushed duckctl $version to the tap" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -53,3 +53,10 @@ ratatui = { version = "0.30.2", default-features = false, features = [
     "crossterm",
     "layout-cache",
 ] }
+
+# The QR code `robotctl vetbook` shows after a share, to open the card on a phone. Pure
+# computation, no image backends.
+qrcode = { version = "0.14.1", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"

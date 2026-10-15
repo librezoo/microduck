@@ -52,6 +52,7 @@ mod led;
 mod monitor;
 mod path_map;
 mod show;
+mod vetbook;
 
 /// Exit codes. Stable — CI asserts on these.
 mod exit {
@@ -196,6 +197,22 @@ enum Namespace {
         /// The new level. Omit it to read the current one.
         #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
         level: Option<u8>,
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// The duck's vet book: its whole life in numbers.
+    ///
+    /// Hours awake, walking, standing and sitting; metres walked; falls, pickups, pets and
+    /// skills; and every servo — how long the one in each joint has run, how hot it has been,
+    /// what it has tripped on, and how long the ones before it lasted. `robotd` keeps it in
+    /// `/var/lib/robot/vetbook.json`, so it survives updates and lasts the life of the robot.
+    /// A servo swap is written down by itself, when `robotd` adopts a factory-fresh servo.
+    ///
+    /// On a terminal it opens a live page (`q` quits, `←`/`→` tabs, `n` writes a dated line in
+    /// the diary); piped, it prints plain text.
+    Vetbook {
+        /// The book as JSON, exactly as `robot.vetbook` answers it.
         #[arg(long)]
         json: bool,
     },
@@ -5429,7 +5446,7 @@ fn robot_skills(robot_socket: &Path) -> Option<Vec<String>> {
     Some(ack.skills)
 }
 
-fn run_pad(socket: &Path, command: PadCommand) -> Result<(), Failure> {
+fn run_pad(socket: &Path, config: &Path, command: PadCommand) -> Result<(), Failure> {
     let mut client = Client::connect_to("configd", socket)?;
     client.hello()?;
 
@@ -5475,7 +5492,9 @@ fn run_pad(socket: &Path, command: PadCommand) -> Result<(), Failure> {
     }
 
     match command {
-        PadCommand::Status { .. } => println!("{}", render_pad_status(&result)?),
+        PadCommand::Status { .. } => {
+            println!("{}", render_pad_status(&result, udp_selected(config))?)
+        }
         PadCommand::Pair { .. } => return report_pair(&result),
         PadCommand::Bindings { .. } | PadCommand::Bind { .. } | PadCommand::Reset { .. } => {
             unreachable!("bindings, bind and reset returned before this point")
@@ -5500,7 +5519,15 @@ fn run_pad(socket: &Path, command: PadCommand) -> Result<(), Failure> {
     Ok(())
 }
 
-fn render_pad_status(result: &serde_json::Value) -> Result<String, Failure> {
+/// Whether `[netpad] enabled` gives the pad to netpadd — the question padd's own `ExecCondition=`
+/// asks, answered the same way: a file that cannot be read counts as not enabled, as it does for
+/// padd, so this never explains a stand-down that did not happen.
+fn udp_selected(config: &Path) -> bool {
+    robotd_params::Params::load(config, false).is_ok_and(|p| p.netpad.enabled)
+}
+
+/// `udp` is whether `[netpad] enabled` is set, which is what an inactive `padd` means then.
+fn render_pad_status(result: &serde_json::Value, udp: bool) -> Result<String, Failure> {
     use std::fmt::Write;
     let status: proto::PadStatusResult = decode(result)?;
 
@@ -5534,6 +5561,11 @@ fn render_pad_status(result: &serde_json::Value) -> Result<String, Failure> {
             .to_owned(),
         proto::UnitState::Failed => "FAILED to start — check:  \
                                      sudo journalctl -u padd -b | tail -30"
+            .to_owned(),
+        // Stood down, not stopped: padd's `ExecCondition=` skips it when the pad is over UDP.
+        // Advising a start here would be advising the one thing that selection exists to prevent.
+        proto::UnitState::Inactive if udp => "standing down — `[netpad] enabled` hands the pad \
+                                              to netpadd; see docs/robot/udp-pad.md"
             .to_owned(),
         proto::UnitState::Inactive => {
             "NOT running — start it:  sudo systemctl start padd".to_owned()
@@ -5858,6 +5890,9 @@ fn run(cli: Cli) -> Result<(), Failure> {
         Namespace::Version { json } => {
             return run_version(&cli.socket, &cli.robot_socket, &cli.config_socket, json);
         }
+        Namespace::Vetbook { json } => {
+            return vetbook::run(&cli.robot_socket, &cli.config_socket, &cli.socket, json);
+        }
         Namespace::Monitor { hz, json } => {
             return monitor::run(
                 &cli.robot_socket,
@@ -5901,7 +5936,7 @@ fn run(cli: Cli) -> Result<(), Failure> {
             ) {
                 return run_pad_bindings(&cli.robot_socket, &cli.pad_config, command);
             }
-            return run_pad(&cli.config_socket, command);
+            return run_pad(&cli.config_socket, &cli.pad_config, command);
         }
         Namespace::Account { command } => {
             return run_account(&cli.socket, command);
@@ -6352,6 +6387,35 @@ mod tests {
             note.contains("journalctl -u robotd.service --boot=0"),
             "{note}"
         );
+    }
+
+    // ── robotctl pad status ──────────────────────────────────────────────
+
+    /// `padd` inactive is two different robots: one where it should be running and is not, and
+    /// one where `[netpad] enabled` stood it down for netpadd. Telling the second to start padd
+    /// would hand the pad back to Bluetooth by hand, until the next restart undid it.
+    #[test]
+    fn an_inactive_padd_is_a_stand_down_when_the_pad_is_over_udp() {
+        let inactive = serde_json::to_value(proto::PadStatusResult {
+            pads: Vec::new(),
+            driver: proto::UnitState::Inactive,
+        })
+        .unwrap();
+
+        let bluetooth =
+            render_pad_status(&inactive, false).unwrap_or_else(|e| panic!("{}", e.message));
+        assert!(
+            bluetooth.contains("sudo systemctl start padd"),
+            "{bluetooth}"
+        );
+
+        let udp = render_pad_status(&inactive, true).unwrap_or_else(|e| panic!("{}", e.message));
+        assert!(!udp.contains("systemctl start padd"), "{udp}");
+        assert!(
+            udp.contains("[netpad] enabled") && udp.contains("netpadd"),
+            "{udp}"
+        );
+        assert!(udp.contains("udp-pad.md"), "{udp}");
     }
 
     // ── robotctl policy ──────────────────────────────────────────────────

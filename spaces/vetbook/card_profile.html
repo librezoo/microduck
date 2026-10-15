@@ -1,0 +1,64 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* profile */
+.profile { background: #2b2140; }
+.profile .holo { position: absolute; inset: 22px; border-radius: 30px; background: conic-gradient(from 200deg, #ffc4e1, #c8b4ff, #b4e9ff, #c6ffd8, #fff1b0, #ffc4e1); }
+.profile .in { position: absolute; inset: 8px; border-radius: 24px; background: #fffaf4; overflow: hidden; }
+.profile { --p1: #ffe8f1; --p2: #efe6ff; --tag: #ff6fa5; }
+.profile.pal1 { --p1: #dcf7ec; --p2: #dcefff; --tag: #2f9a8a; }
+.profile.pal2 { --p1: #fff1d6; --p2: #ffe1d6; --tag: #e5862a; }
+.profile.pal3 { --p1: #eee4ff; --p2: #ffe4f2; --tag: #8e6ad8; }
+.profile .in::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 520px; background: linear-gradient(180deg, var(--p1), var(--p2)); }
+.profile .in::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 520px; background: radial-gradient(#ffffff 3px, transparent 3.5px) 0 0 / 34px 34px; opacity: .8; }
+.profile .sticker { width: 390px; left: 64px; top: 104px; z-index: 2; }
+.profile .label { position: absolute; left: 44px; top: 34px; z-index: 2; font: 400 22px "Mochiy Pop One"; color: #fff; background: var(--tag); padding: 6px 18px; border-radius: 99px; letter-spacing: .1em; }
+.profile .no { position: absolute; left: 44px; bottom: 34px; z-index: 2; font: 700 18px "Zen Maru Gothic"; color: #a28ab8; }
+.profile .prof { position: absolute; left: 570px; right: 50px; top: 40px; z-index: 2; color: #4a3a5e; }
+.profile .prof h3 { margin: 0; font: 400 52px/1.05 "Mochiy Pop One"; color: #4a3a5e; white-space: nowrap; }
+.profile .prof h3 .fit { display: block; }
+.profile .prof h3 small { display: block; font: 700 20px "Zen Maru Gothic"; color: #a28ab8; letter-spacing: .14em; margin-top: 6px; }
+.profile dl { display: grid; grid-template-columns: 210px 1fr; gap: 10px 14px; margin: 22px 0 0; font: 700 21px "Zen Maru Gothic"; }
+.profile dt { color: var(--tag); }
+.profile dd { margin: 0; color: #4a3a5e; white-space: nowrap; }
+.profile dd b { font: 400 24px "Mochiy Pop One"; }
+.profile .stars { color: #ffbf3d; letter-spacing: .1em; }
+.profile .stars s { color: #e6dcef; text-decoration: none; }
+.profile .stars span { color: #4a3a5e; letter-spacing: .02em; margin-left: 8px; }
+.profile .pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+.profile .pill { font: 700 17px "Zen Maru Gothic"; color: #6a5490; background: #f1eaff; border-radius: 99px; padding: 3px 12px; }
+.profile .pill b { font: 400 18px "Mochiy Pop One"; color: #4a3a5e; margin-right: 4px; }
+.profile .bubble { position: absolute; right: 48px; bottom: 30px; z-index: 2; background: #4a3a5e; color: #fff; border-radius: 22px; padding: 10px 22px; font: 400 22px "Mochiy Pop One"; }
+.profile .bubble small { font: 700 15px "Zen Maru Gothic"; opacity: .8; margin-left: 8px; }
+{% endblock %}
+{% block card %}
+  <div class="holo"><div class="in">
+    <div class="label">PROFILE ♡</div>
+    <img class="sticker" src="{{ sticker }}" alt="">
+    <div class="no">Nº {{ c.number }} · microduck</div>
+    <div class="prof">
+      <h3><span class="fit">{{ c.robot }}</span><small>microduck · @{{ c.owner }}</small></h3>
+      <dl>
+        <dt>birthday</dt><dd><b>{{ c.birthday }}</b></dd>
+        <dt>favourite trick</dt><dd>{% if c.favourite %}<b>{{ c.favourite }}</b> ×{{ c.favourite_count }}{% else %}<b>still learning</b>{% endif %}</dd>
+        <dt>walked</dt><dd><b>{{ c.walked }} {{ c.walked_unit }}</b></dd>
+        <dt>energy</dt><dd class="stars">{{ "★" * c.energy }}<s>{{ "★" * (5 - c.energy) }}</s><span>{{ c.awake }} awake</span></dd>
+        <dt>cuddles</dt><dd class="stars">{{ "★" * c.cuddliness }}<s>{{ "★" * (5 - c.cuddliness) }}</s><span>{{ c.cuddles }} cuddles</span></dd>
+        <dt>clumsiness</dt><dd class="stars">{{ "★" * c.clumsiness }}<s>{{ "★" * (5 - c.clumsiness) }}</s><span>{{ c.falls }} falls</span></dd>
+      </dl>
+      <div class="pills">
+        <span class="pill"><b>{{ c.personality }}</b></span>
+        {% if c.sign %}<span class="pill"><b>{{ c.sign }}</b>duck</span>{% endif %}
+        {% if c.spins %}<span class="pill"><b>{{ c.spins }}</b>spins</span>{% endif %}
+        {% if c.naps %}<span class="pill"><b>{{ c.naps }}</b>naps</span>{% endif %}
+        {% if c.songs %}<span class="pill"><b>{{ c.songs }}</b>songs</span>{% endif %}
+        {% if c.carried_s >= 60 %}<span class="pill"><b>{{ c.carried }}</b>carried</span>{% endif %}
+        {% if c.tricks_known > 1 %}<span class="pill"><b>{{ c.tricks_known }}</b>tricks known</span>{% endif %}
+      </div>
+    </div>
+    <div class="bubble">{{ c.status.title|lower }}<small>{{ c.status.line }}</small></div>
+    {% for b in c.badges[:4] %}
+    {{ m.badge(b, 66, [-6, 5, -3, 7][loop.index0], "left:" ~ (40 + loop.index0 * 112) ~ "px;top:420px") }}
+    {% endfor %}
+  </div></div>
+{% endblock %}

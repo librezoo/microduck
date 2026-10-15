@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&family=Zen+Maru+Gothic:wght@500;700&family=Space+Mono:wght@400;700&family=Silkscreen:wght@400;700&family=VT323&family=Caveat:wght@600;700&family=Barlow+Condensed:wght@500;600;700;800&display=block">
+<style>
+/* The base every card extends: one 1200×630 card (the story overrides the size), the sticker, the
+   badge stickers, the seasonal overlay, and the script that fits long names. */
+* { box-sizing: border-box; }
+html, body { margin: 0; width: {{ width }}px; height: {{ height }}px; overflow: hidden; }
+.card { position: relative; width: {{ width }}px; height: {{ height }}px; overflow: hidden; font-family: "Zen Maru Gothic", sans-serif; }
+.sticker { position: absolute; display: block; filter: drop-shadow(0 10px 16px #7a4a6a33); }
+.pix { image-rendering: pixelated; display: block; }
+.spark { position: absolute; color: #fff; font-size: 30px; text-shadow: 0 0 10px #fff8; }
+
+/* a badge: a round sticker with a white rim, its glyph, its name curved below in a ribbon */
+.badge { position: absolute; width: var(--bs, 92px); text-align: center; transform: rotate(var(--r, 0deg)); z-index: 5; }
+.badge .disc { width: var(--bs, 92px); height: var(--bs, 92px); border-radius: 50%; background: var(--bc); border: 5px solid #fff; box-shadow: 0 5px 0 #0002, 0 6px 14px #0002; display: grid; place-items: center; color: #fff; font: 400 calc(var(--bs, 92px) * .42)/1 "Mochiy Pop One", "Zen Maru Gothic", sans-serif; }
+.badge .ribbon { display: inline-block; margin-top: -10px; position: relative; background: #fff; color: #4a3a5e; border-radius: 99px; padding: 2px 10px; font: 700 calc(var(--bs, 92px) * .15) "Zen Maru Gothic"; white-space: nowrap; box-shadow: 0 2px 0 #0001; }
+.badges-inline { display: flex; flex-wrap: wrap; gap: 10px; }
+.badges-inline .badge { position: static; transform: none; }
+
+/* seasons: a layer over the whole card, never over the numbers' meaning */
+.season { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+.season span { position: absolute; font-size: var(--s, 40px); opacity: var(--o, .9); transform: rotate(var(--r, 0deg)); }
+.season.winter span { color: #fff; text-shadow: 0 0 8px #9fd3ff; }
+.season.valentine span { color: #ff6b9a; }
+{% block style %}{% endblock %}
+</style>
+</head>
+<body>
+<div class="card {{ kind or c.style }} pal{{ c.palette }}">
+{% block card %}{% endblock %}
+{% if c.season == "halloween" %}
+<div class="season halloween">
+  <span style="right:22px;top:14px;--s:34px;--r:10deg">🦇</span><span style="right:80px;top:44px;--s:22px;--r:-8deg">🦇</span>
+  <span style="left:16px;bottom:12px;--s:40px;--r:-10deg">🎃</span><span style="right:18px;bottom:14px;--s:36px;--r:6deg">🎃</span>
+</div>
+{% elif c.season == "winter" %}
+<div class="season winter">
+  {% for x, y, s in [(52,3,18),(66,6,24),(80,3,20),(93,8,30),(97,36,18),(94,62,24),(2,62,20),(3,90,28),(24,94,18),(48,96,22),(72,93,20),(90,92,26)] %}
+  <span style="left:{{ x }}%;top:{{ y }}%;--s:{{ s }}px">❄</span>
+  {% endfor %}
+</div>
+{% elif c.season == "valentine" %}
+<div class="season valentine">
+  {% for x, y, s, r in [(93,4,28,10),(97,40,20,-8),(3,88,26,8),(91,86,32,-10),(30,95,18,-6),(68,94,22,12)] %}
+  <span style="left:{{ x }}%;top:{{ y }}%;--s:{{ s }}px;--r:{{ r }}deg">♥</span>
+  {% endfor %}
+</div>
+{% endif %}
+</div>
+<script>
+  // Names are whatever the owner called the duck. Shrink each to its space once the fonts are in;
+  // the renderer calls this after `document.fonts.ready`, before the screenshot.
+  window.fit = () => {
+    for (const el of document.querySelectorAll(".fit")) {
+      let size = parseFloat(getComputedStyle(el).fontSize);
+      while (el.scrollWidth > el.clientWidth + 1 && size > 12) {
+        size -= 1;
+        el.style.fontSize = size + "px";
+      }
+    }
+  };
+</script>
+</body>
+</html>

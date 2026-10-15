@@ -1,0 +1,50 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* purikura */
+.purikura { --g1: #ffd1e6; --g2: #e7d6ff; --g3: #c9ecff; background: linear-gradient(135deg, var(--g1) 0%, var(--g2) 45%, var(--g3) 100%); color: #4a3a5e; }
+.purikura.pal1 { --g1: #ffe0c2; --g2: #ffc9e0; --g3: #e3d4ff; }
+.purikura.pal2 { --g1: #c9f5e3; --g2: #c9e8ff; --g3: #e1d6ff; }
+.purikura.pal3 { --g1: #fff4bf; --g2: #ffd8c2; --g3: #ffc9de; }
+.purikura::before { content: ""; position: absolute; inset: 18px; border: 4px dotted #ffffffcc; border-radius: 34px; }
+.purikura .halo { position: absolute; left: 70px; top: 120px; width: 470px; height: 420px; border-radius: 50%; background: radial-gradient(#ffffffd9, #ffffff00 68%); }
+.purikura .sticker { width: 460px; left: 70px; top: 170px; transform: rotate(-4deg); }
+.purikura .bubble { position: absolute; left: 190px; top: 46px; background: #fff; border-radius: 30px; padding: 12px 26px; font: 400 30px "Mochiy Pop One"; color: #ff5c9a; box-shadow: 0 6px 0 #ffb3d1; }
+.purikura .bubble::after { content: ""; position: absolute; left: 60px; bottom: -20px; border: 14px solid transparent; border-top-color: #fff; border-left-width: 6px; }
+.purikura .bubble small { display: block; font: 700 15px "Zen Maru Gothic"; color: #b07a98; letter-spacing: .06em; }
+.purikura .name { position: absolute; left: 600px; right: 40px; top: 60px; }
+.purikura .name b { font: 400 60px/1 "Mochiy Pop One"; color: #fff; -webkit-text-stroke: 9px #8e6ad8; paint-order: stroke fill; display: block; filter: drop-shadow(0 6px 0 #6a4ab8); white-space: nowrap; }
+.purikura .name span { display: inline-block; margin-top: 14px; font: 700 20px "Zen Maru Gothic"; background: #ffffffb3; padding: 4px 14px; border-radius: 99px; color: #6a5490; }
+.purikura .chips { position: absolute; left: 600px; right: 46px; top: 212px; display: flex; flex-wrap: wrap; gap: 13px 12px; }
+.purikura .chip { background: var(--c); border-radius: 22px; padding: 8px 18px 6px; box-shadow: 0 6px 0 var(--d); transform: rotate(var(--r)); color: #fff; }
+.purikura .chip b { font: 400 30px/1.1 "Mochiy Pop One"; display: block; }
+.purikura .chip span { font: 700 15px "Zen Maru Gothic"; }
+.purikura .verdict { position: absolute; left: 600px; bottom: 50px; font: 400 26px "Mochiy Pop One"; color: #ff5c9a; }
+.purikura .verdict span { font: 700 18px "Zen Maru Gothic"; color: #6a5490; margin-left: 10px; }
+.purikura .brand { position: absolute; right: 52px; bottom: 34px; font: 700 15px "Zen Maru Gothic"; color: #8e7aa8; }
+{% endblock %}
+{% block card %}
+  <div class="halo"></div>
+  <img class="sticker" src="{{ sticker }}" alt="">
+  <div class="bubble">{{ c.status.title|lower }}<small>{{ c.status.line }}</small></div>
+  {% for b in c.badges[:3] %}
+  {{ m.badge(b, 84, [-10, 8, -5][loop.index0], ["left:36px;top:438px", "left:448px;top:420px", "left:470px;top:206px"][loop.index0]) }}
+  {% endfor %}
+  <span class="spark" style="left:70px;top:90px">✦</span><span class="spark" style="left:520px;top:150px;font-size:22px">✦</span><span class="spark" style="left:110px;top:520px;font-size:20px">✧</span><span class="spark" style="left:470px;top:500px">✦</span>
+  <div class="name"><b class="fit">{{ c.robot }}</b><span>@{{ c.owner }}'s microduck ♡ day {{ c.day }}</span></div>
+  <div class="chips">
+    <div class="chip" style="--c:#ff7eb0;--d:#e0558c;--r:-3deg"><b>{{ c.walked }} {{ c.walked_unit }}</b><span>walked</span></div>
+    <div class="chip" style="--c:#9b7bff;--d:#7656dc;--r:2deg"><b>{{ c.awake }}</b><span>awake</span></div>
+    <div class="chip" style="--c:#5cc9a7;--d:#3aa483;--r:-1deg"><b>{{ c.cuddles }}</b><span>cuddles</span></div>
+    <div class="chip" style="--c:#ffa94d;--d:#e5862a;--r:3deg"><b>{{ c.pets }}</b><span>pets</span></div>
+    <div class="chip" style="--c:#5ab3f0;--d:#3a92cf;--r:-2deg"><b>{{ c.falls }}</b><span>oopsie falls</span></div>
+    {% if c.favourite %}<div class="chip" style="--c:#ff7eb0;--d:#e0558c;--r:1deg"><b>×{{ c.favourite_count }}</b><span>{{ c.favourite }} ★</span></div>{% endif %}
+    {% if c.spins %}<div class="chip" style="--c:#9b7bff;--d:#7656dc;--r:-2deg"><b>{{ c.spins }}</b><span>spins ↻</span></div>{% endif %}
+    {% if c.songs %}<div class="chip" style="--c:#5cc9a7;--d:#3aa483;--r:2deg"><b>{{ c.songs }}</b><span>songs ♪</span></div>{% endif %}
+    {% if c.naps %}<div class="chip" style="--c:#ffa94d;--d:#e5862a;--r:-1deg"><b>{{ c.naps }}</b><span>naps</span></div>{% endif %}
+    {% if c.carried_s >= 60 %}<div class="chip" style="--c:#5ab3f0;--d:#3a92cf;--r:1deg"><b>{{ c.carried }}</b><span>carried around</span></div>{% endif %}
+    {% if c.ground_picks %}<div class="chip" style="--c:#ff7eb0;--d:#e0558c;--r:-2deg"><b>{{ c.ground_picks }}</b><span>ground picks</span></div>{% endif %}
+  </div>
+  <div class="verdict">{{ c.personality }}{% if c.sign %}<span>a {{ c.sign }} duck</span>{% endif %}</div>
+  <div class="brand">microduck vet book ♡</div>
+{% endblock %}

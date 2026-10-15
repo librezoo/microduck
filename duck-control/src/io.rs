@@ -195,6 +195,30 @@ pub trait RobotIo {
     fn imu_ready(&self) -> bool {
         true
     }
+
+    /// Each servo's `Hardware Error Status` (register 70), in joint order: the latched alert bits
+    /// — input voltage, overheating, motor encoder, electrical shock, overload — that hold torque
+    /// off until a reboot. The servos keep no log of their own; this is the nearest thing, and
+    /// the vet book counts each bit as it comes up.
+    ///
+    /// `None` from a backend with no servos to ask, which is the default.
+    fn hardware_errors(&mut self) -> Result<Option<[u8; NUM_JOINTS]>> {
+        Ok(None)
+    }
+
+    /// Each servo's model number and firmware version (registers 0 and 6), in joint order. Read
+    /// once a start, for the vet book: a servo has no serial number, so this is all the identity
+    /// it has. `None` from a backend with no servos, which is the default.
+    fn servo_identity(&mut self) -> Result<Option<[ServoIdentity; NUM_JOINTS]>> {
+        Ok(None)
+    }
+}
+
+/// What a servo can say about itself — see [`RobotIo::servo_identity`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServoIdentity {
+    pub model: u16,
+    pub firmware: u8,
 }
 
 /// A robot made of nothing, for tests.

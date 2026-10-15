@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{ title }}</title>
+<meta name="description" content="{{ description }}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ title }}">
+<meta property="og:description" content="{{ description }}">
+{% if image %}
+<meta property="og:image" content="{{ image }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{{ title }}: a card with this microduck's stats">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="{{ image }}">
+{% endif %}
+<meta property="og:url" content="{{ url }}">
+<meta name="twitter:title" content="{{ title }}">
+<meta name="twitter:description" content="{{ description }}">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦆</text></svg>">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mochiy+Pop+One&family=Zen+Maru+Gothic:wght@500;700&display=swap">
+<style>
+:root {
+  --bg: #fff3f7; --ink: #4a3a5e; --soft: #8e7aa8; --pink: #ff5c9a; --pink-d: #e0558c;
+  --lav: #9b7bff; --lav-d: #7656dc; --mint: #5cc9a7; --mint-d: #3aa483; --sky: #5ab3f0; --sky-d: #3a92cf;
+  --card: #ffffff; --line: #f1d6e4;
+  --display: "Mochiy Pop One", "Zen Maru Gothic", system-ui, sans-serif;
+  --body: "Zen Maru Gothic", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #221a2e; --ink: #f4ecff; --soft: #b9a8d4; --card: #2e2440; --line: #44365a; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 500 17px/1.6 var(--body);
+  background-image: radial-gradient(color-mix(in srgb, var(--pink) 18%, transparent) 2px, transparent 2.5px); background-size: 28px 28px; }
+main { max-width: 1040px; margin: 0 auto; padding-inline: 16px; padding-block: 36px 64px; display: grid; gap: 26px; }
+h1 { font: 400 clamp(28px, 5vw, 44px)/1.15 var(--display); margin: 0; text-wrap: balance; }
+h1 span { color: var(--pink); }
+.lede { margin: 6px 0 0; color: var(--soft); }
+.lede a { color: inherit; }
+.card { width: 100%; max-width: 100%; aspect-ratio: 1200 / 630; height: auto; border-radius: 22px; display: block;
+  box-shadow: 0 14px 40px #b04a8a33, 0 0 0 6px var(--card); background: var(--card); }
+.share { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { font: 400 18px var(--display); color: #fff; background: var(--c, var(--pink)); border: 0; border-radius: 99px;
+  padding: 12px 22px; box-shadow: 0 5px 0 var(--d, var(--pink-d)); text-decoration: none; cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(3px); box-shadow: 0 2px 0 var(--d, var(--pink-d)); }
+.btn:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.hint { color: var(--soft); font-size: 15px; margin: 0; min-height: 1.6em; }
+.empty { background: var(--card); border-radius: 22px; padding: 32px; text-align: center; box-shadow: 0 0 0 6px var(--line); }
+.empty img { width: min(320px, 80%); }
+footer { color: var(--soft); font-size: 14px; }
+footer a { color: inherit; }
+code { font-size: .95em; background: var(--card); padding: 1px 6px; border-radius: 6px; }
+@media (prefers-reduced-motion: reduce) { .btn:hover, .btn:active { transform: none; } }
+</style>
+</head>
+<body>
+<main>
+  {% if card %}
+  <header>
+    <h1><span>{{ robot }}</span>'s vet book ♡</h1>
+    <p class="lede">A microduck belonging to <a href="https://huggingface.co/{{ owner }}">@{{ owner }}</a>. Shared straight from the robot.</p>
+  </header>
+  <img class="card" src="{{ image }}" alt="{{ title }}: hours awake, distance walked, cuddles, falls and its favourite trick" width="1200" height="630">
+  <div class="share">
+    <a class="btn post" href="https://x.com/intent/post?text={{ post_text|urlencode }}&url={{ url|urlencode }}" target="_blank" rel="noopener">Post on X</a>
+    <a class="btn post" style="--c:var(--sky);--d:var(--sky-d)" href="https://bsky.app/intent/compose?text={{ (post_text ~ ' ' ~ url)|urlencode }}" target="_blank" rel="noopener">Post on Bluesky</a>
+    <a class="btn post" style="--c:var(--lav);--d:var(--lav-d)" href="https://www.linkedin.com/sharing/share-offsite/?url={{ url|urlencode }}" target="_blank" rel="noopener">Share on LinkedIn</a>
+    <button class="btn" style="--c:var(--mint);--d:var(--mint-d)" id="copy" type="button">Copy link</button>
+    <a class="btn" style="--c:#ffa94d;--d:#e5862a" href="{{ image }}" download="{{ robot }}-vetbook.png">Download card</a>
+    <a class="btn" style="--c:#ff9a5c;--d:#e0763a" href="{{ story }}" download="{{ robot }}-vetbook-story.png">Download story</a>
+    <button class="btn" style="--c:var(--pink);--d:var(--pink-d)" id="native" type="button" hidden>Share…</button>
+  </div>
+  <p class="hint" id="hint" aria-live="polite"></p>
+  <footer>The book behind this card is public: <a href="https://huggingface.co/datasets/{{ dataset }}">{{ dataset }}</a>. On a microduck, <code>robotctl vetbook</code> and <kbd>s</kbd> shares yours.</footer>
+  {% else %}
+  <header>
+    <h1>{{ heading[0] }} <span>{{ heading[1] }}</span></h1>
+    <p class="lede">{{ message }}</p>
+  </header>
+  <div class="empty"><img src="/sticker.webp" alt="A microduck head"><p>On a microduck signed in to Hugging Face, open <code>robotctl vetbook</code> and press <kbd>s</kbd> to share its book.</p></div>
+  {% endif %}
+</main>
+{% if card %}
+<script>
+  const url = {{ url|tojson }};
+  const hint = document.getElementById("hint");
+
+  // A post link can carry text and a URL, never an image. So the card goes on the clipboard as the
+  // composer opens, to paste in. The blob is handed over as a promise, inside the click, because
+  // that is what keeps the browser's permission to write the clipboard while the image downloads.
+  const card = () => fetch({{ image|tojson }}).then(r => r.blob()).then(b => new Blob([b], { type: "image/png" }));
+  for (const a of document.querySelectorAll(".post")) {
+    a.addEventListener("click", () => {
+      if (!window.ClipboardItem || !navigator.clipboard?.write) return;
+      navigator.clipboard
+        .write([new ClipboardItem({ "image/png": card() })])
+        .then(() => { hint.textContent = "The card is on your clipboard: paste it into the post (Ctrl+V or ⌘V) ♡"; })
+        .catch(() => { hint.textContent = "Use Download card to attach the picture to your post."; });
+    });
+  }
+  document.getElementById("copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(url); hint.textContent = "Link copied ♡"; }
+    catch { hint.textContent = url; }
+  });
+  // On a phone, the system share sheet can carry the card itself, not just the link.
+  const native = document.getElementById("native");
+  if (navigator.share) {
+    native.hidden = false;
+    native.addEventListener("click", async () => {
+      try {
+        const blob = await (await fetch({{ image|tojson }})).blob();
+        const file = new File([blob], {{ (robot ~ "-vetbook.png")|tojson }}, { type: "image/png" });
+        const data = { title: {{ title|tojson }}, text: {{ post_text|tojson }}, url };
+        if (navigator.canShare?.({ files: [file] })) data.files = [file];
+        await navigator.share(data);
+      } catch (e) { if (e.name !== "AbortError") hint.textContent = "Sharing did not work here; copy the link instead."; }
+    });
+  }
+</script>
+{% endif %}
+</body>
+</html>

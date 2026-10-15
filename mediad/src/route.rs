@@ -150,6 +150,12 @@ fn permits(call: &proto::Call) -> bool {
         // The robot's static geometry, for a mapper on the other end of the video: a read.
         RobotModel => true,
 
+        // The vet book is a read like the two above. Writing in it is not: a note lasts the life
+        // of the robot, and §4 — no authorisation on this transport — would let any LAN peer write
+        // there. `robotctl` on the robot and a bonded phone are where a note comes from.
+        RobotVetbook => true,
+        RobotVetbookNote(_) => false,
+
         // Re-reading the slots goes with loading one: a client that can change what drives the
         // robot wants the case where something else changed it too.
         RobotReloadPolicies => true,
@@ -204,6 +210,13 @@ fn permits(call: &proto::Call) -> bool {
         // to prove an identity. Same "the robot touches the network on a peer's behalf", very
         // different thing arriving.
         AccountLogin(_) | AccountStatus | AccountLogout => true,
+
+        // Not sharing, though. A share publishes under the owner's name, in public, and §4 — no
+        // authorisation on this transport — would let any LAN peer do that. The phone over BLE
+        // and `robotctl` on the robot are where a share comes from.
+        VetbookShare => false,
+        // Daemon-to-daemon plumbing, like the chorale's: not a client surface.
+        RobotVetbookTally(_) => false,
 
         // ── the streams BLE pointed here ────────────────────────────────────
         //

@@ -349,6 +349,8 @@ fn main() -> ExitCode {
         // starts on its own when a login lands — and *before* the pipeline, because the first
         // consumer's offer is built as the pipeline comes up.
         let relays = mediad::turn::Relays::empty();
+        // The camera's lines in the vet book, reported to `robotd` once a minute.
+        tokio::spawn(mediad::vetbook::report());
         tokio::spawn(mediad::turn::maintain(
             std::sync::Arc::clone(&relays),
             args.token.clone(),

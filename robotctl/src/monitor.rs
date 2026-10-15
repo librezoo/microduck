@@ -165,13 +165,9 @@ const HEALTH_POLL: Duration = Duration::from_secs(2);
 /// charge would otherwise sit on screen looking current forever.
 const HEALTH_STALE: Duration = Duration::from_secs(6);
 
-/// Battery percentages the reading is coloured at.
-///
-/// Not display taste: 0% is `duck_control::model::BATTERY_EMPTY_V`, which is the voltage at
-/// which `robotd` sits the robot down and cuts power. The percentage is a countdown to that, so
-/// the last fifth of it is worth seeing from across a room.
-const BATTERY_LOW_PCT: f64 = 30.0;
-const BATTERY_CRITICAL_PCT: f64 = 15.0;
+/// Battery percentages the reading is coloured at — `proto::Battery`'s, shared with `duckctl`.
+const BATTERY_LOW_PCT: f64 = proto::Battery::LOW_PCT;
+const BATTERY_CRITICAL_PCT: f64 = proto::Battery::CRITICAL_PCT;
 
 /// Request id for the health poll. Its own connection, but matched rather than assumed: a
 /// `robotd` newer than this build may say things on it this one has no use for.

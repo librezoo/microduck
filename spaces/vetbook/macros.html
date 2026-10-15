@@ -1,0 +1,4 @@
+{# Shared pieces of the cards, imported with `{% import "macros.html" as m %}`. #}
+{% macro badge(b, size=92, rot=0, style="") -%}
+<div class="badge" style="--bs:{{ size }}px;--bc:{{ b.colour }};--r:{{ rot }}deg;{{ style }}"><div class="disc">{{ b.glyph }}</div><div class="ribbon">{{ b.name }}</div></div>
+{%- endmacro %}

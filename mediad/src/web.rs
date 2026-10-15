@@ -116,7 +116,10 @@ async fn snapshot(socket: PathBuf, slots: Arc<tokio::sync::Semaphore>) -> axum::
     }
     .await;
     let mut response = match result {
-        Ok(png) => ([(header::CONTENT_TYPE, "image/png")], png).into_response(),
+        Ok(png) => {
+            crate::vetbook::photo();
+            ([(header::CONTENT_TYPE, "image/png")], png).into_response()
+        }
         Err(error) => {
             tracing::debug!(%error, "snapshot unavailable");
             (

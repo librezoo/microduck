@@ -31,6 +31,7 @@ mod sing;
 mod soc;
 mod sound;
 mod theremin;
+mod vetbook;
 mod volume;
 
 use std::path::{Path, PathBuf};
@@ -282,6 +283,12 @@ struct Args {
     /// Report that it is not safe to restart, as if the robot were moving.
     #[arg(long)]
     busy: bool,
+
+    /// Where the vet book lives — the robot's lifetime record (`vetbook.rs`). Defaults to
+    /// `/var/lib/robot/vetbook.json` on a robot; under `--fake` and `--sim` the book is kept in
+    /// memory unless this names a file, so a laptop running the twin writes nothing to `/var/lib`.
+    #[arg(long)]
+    vetbook: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -723,6 +730,10 @@ struct RobotState {
     /// [`control::Controller::busy`] already draws.
     sitting: AtomicBool,
 
+    /// The vet book: the robot's lifetime record. The loop hands it what it counted once a second
+    /// and never waits for it — see [`vetbook`].
+    vetbook: vetbook::Book,
+
     period_us: u64,
     min_achieved_hz: f64,
     stall_periods: u32,
@@ -794,6 +805,8 @@ impl RobotState {
             moving: AtomicBool::new(false),
             homed: AtomicBool::new(false),
             sitting: AtomicBool::new(false),
+            // In memory until `main` opens the robot's own; tests keep it that way.
+            vetbook: vetbook::Book::open(None, env!("CARGO_PKG_VERSION")),
             period_us: params.period().as_micros() as u64,
             min_achieved_hz: params.update_gate.min_achieved_hz,
             stall_periods: params.update_gate.stall_periods,
@@ -1100,12 +1113,12 @@ async fn main() -> ExitCode {
     };
     duck_ipc_proto::log_startup_identity!("robotd");
 
-    let state = Arc::new(RobotState::new(
-        &params,
-        &params_path,
-        args.unhealthy,
-        args.busy,
-    ));
+    let mut state = RobotState::new(&params, &params_path, args.unhealthy, args.busy);
+    let vetbook_path = args.vetbook.clone().or_else(|| {
+        (!args.fake && args.sim.is_none()).then(|| PathBuf::from(vetbook::DEFAULT_PATH))
+    });
+    state.vetbook = vetbook::Book::open(vetbook_path, env!("CARGO_PKG_VERSION"));
+    let state = Arc::new(state);
 
     let _ = state
         .body_imu_mount
@@ -1149,6 +1162,18 @@ async fn main() -> ExitCode {
     };
 
     let leds = tokio::spawn(leds::run(Arc::clone(&state)));
+    let vetbook_saver = tokio::spawn({
+        let state = Arc::clone(&state);
+        async move {
+            let mut every = tokio::time::interval(vetbook::SAVE_INTERVAL);
+            every.tick().await;
+            loop {
+                every.tick().await;
+                let state = Arc::clone(&state);
+                let _ = tokio::task::spawn_blocking(move || state.vetbook.save()).await;
+            }
+        }
+    });
 
     let serving = serve(
         Arc::clone(&state),
@@ -1172,6 +1197,9 @@ async fn main() -> ExitCode {
     state.shutdown.store(true, Ordering::Relaxed);
     state.leds_changed.notify_one();
     let _ = control.join();
+    // After the loop, which hands over its last second of counting as it stops.
+    vetbook_saver.abort();
+    state.vetbook.save();
     // Bounded: an LED write that hangs on the expander must not hold the daemon up.
     let _ = tokio::time::timeout(Duration::from_secs(1), leds).await;
     let _ = std::fs::remove_file(&args.socket);
@@ -1184,13 +1212,21 @@ fn run_init(params: &Params, calibration: &JointCalibration, duration: Duration)
     // The same open as the daemon's, replacement adoption included: `init` is what someone
     // reaches for right after a motor swap, and it must not be the one path that refuses the
     // new servo.
-    let Some(mut io) = open_bus(
+    let mut adopted = None;
+    let opened = open_bus(
         &params.bus,
         body_imu_mount(params, calibration, params.board.version).0,
         0,
         calibration,
         &mut Vec::new(),
-    ) else {
+        &mut adopted,
+    );
+    // The daemon is stopped while `init` runs — it holds the same lock — so the book is this
+    // process's to write.
+    if let Some(id) = adopted {
+        vetbook::Book::load(Some(PathBuf::from(vetbook::DEFAULT_PATH))).adopted(id);
+    }
+    let Some(mut io) = opened else {
         return ExitCode::FAILURE;
     };
     if let Err(e) = io.set_torque(true) {
@@ -1455,7 +1491,21 @@ async fn open_bus_waiting(
         // quiet thereafter — a board waiting overnight must not fill the journal.
         let mut missing = Vec::new();
         let mut imu_missing = false;
-        if let Some(mut io) = open_bus(bus, imu_mount, attempt, calibration, &mut missing) {
+        let mut adopted = None;
+        let opened = open_bus(
+            bus,
+            imu_mount,
+            attempt,
+            calibration,
+            &mut missing,
+            &mut adopted,
+        );
+        // Written down whether or not the rest of the bring-up works: the servo is in the joint
+        // now, flashed to its ID, and the next attempt will not see it as new.
+        if let Some(id) = adopted {
+            state.vetbook.adopted(id);
+        }
+        if let Some(mut io) = opened {
             match imu_answers(&mut io, attempt) {
                 Some(true) => {
                     state.startup_bus_failures.store(0, Ordering::Relaxed);
@@ -1505,6 +1555,7 @@ fn open_bus(
     attempt: u32,
     calibration: &JointCalibration,
     missing: &mut Vec<u8>,
+    adopted: &mut Option<u8>,
 ) -> Option<BusIo> {
     // First attempt and every thirtieth — about one line per 30 s while waiting.
     let loud = attempt == 0 || attempt.is_multiple_of(STARTUP_READ_LOG_EVERY);
@@ -1525,7 +1576,7 @@ fn open_bus(
     if !bus.fast_sync_read && loud {
         tracing::warn!("bus.fast_sync_read is off; every sync read is a plain one");
     }
-    if !adopt_missing_servo(&mut io, loud, missing) {
+    if !adopt_missing_servo(&mut io, loud, missing, adopted) {
         return None;
     }
     match io.check_registers() {
@@ -1596,7 +1647,12 @@ fn imu_answers(_io: &mut BusIo, _attempt: u32) -> Option<bool> {
 /// unpowered, a servo missing with nothing fresh to replace it, or two missing at once, which
 /// cannot be told apart and is left to a human.
 #[cfg(target_os = "linux")]
-fn adopt_missing_servo(io: &mut BusIo, loud: bool, silent: &mut Vec<u8>) -> bool {
+fn adopt_missing_servo(
+    io: &mut BusIo,
+    loud: bool,
+    silent: &mut Vec<u8>,
+    adopted: &mut Option<u8>,
+) -> bool {
     use duck_control::bus::replacement_target;
 
     let missing = match io.missing_servos() {
@@ -1629,7 +1685,10 @@ fn adopt_missing_servo(io: &mut BusIo, loud: bool, silent: &mut Vec<u8>) -> bool
         return false;
     };
     match io.adopt_replacement(id) {
-        Ok(true) => true,
+        Ok(true) => {
+            *adopted = Some(id);
+            true
+        }
         Ok(false) => {
             if loud {
                 tracing::error!(
@@ -1656,6 +1715,7 @@ fn open_bus(
     _attempt: u32,
     _calibration: &JointCalibration,
     _missing: &mut Vec<u8>,
+    _adopted: &mut Option<u8>,
 ) -> Option<BusIo> {
     tracing::error!("no bus on this platform; use --fake");
     None
@@ -2193,6 +2253,16 @@ async fn control_loop<T: RobotIo>(
     // Loaded once here and again on a mode switch — see `build_controller`.
     let mut controller = build_controller(&policy_cfg, params.safety.limp_fall, &state);
 
+    // The vet book's tally for this process, and what each servo says it is. Read once, here,
+    // before the loop has a deadline to keep: a servo is not going to change model mid-run.
+    let mut vettally = vetbook::Tracker::default();
+    match safety.servo_identity() {
+        Ok(Some(ids)) => state.vetbook.identify(&ids),
+        Ok(None) => {}
+        Err(e) => tracing::debug!(error = %e, "vet book: servo identity read failed"),
+    }
+    let mut last_alert_read = Instant::now();
+
     tracing::warn!(
         joints = NUM_JOINTS,
         hz = 1.0 / period.as_secs_f64(),
@@ -2371,6 +2441,7 @@ async fn control_loop<T: RobotIo>(
     // The robot looking around while nothing is happening — see `idle_head`. Seeded from the
     // clock, so two robots side by side do not glance in step.
     let mut idle_head = idle_head::IdleHead::new(
+        params.idle,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| d.as_nanos() as u64),
@@ -2588,6 +2659,7 @@ async fn control_loop<T: RobotIo>(
             if let Err(e) = safety.set_torque(false) {
                 tracing::warn!(error = %e, "robot.rebootMotors: torque off failed on a servo; rebooting anyway");
             }
+            vettally.motor_reboot();
             match safety.reboot_motors(&ids) {
                 Ok(()) => tracing::warn!(
                     ?ids,
@@ -2676,6 +2748,7 @@ async fn control_loop<T: RobotIo>(
                 while let Some(ev) = pet.try_recv_event() {
                     match ev {
                         pet_detect::PettingEvent::Start => {
+                            vettally.pet();
                             let calm =
                                 !safety.fallen() && controller.as_ref().is_none_or(|c| !c.busy());
                             if calm {
@@ -2978,6 +3051,7 @@ async fn control_loop<T: RobotIo>(
                 intents.set_enabled(false);
                 bringup = Bringup::Limp;
                 powered_off = true;
+                vettally.power_off();
                 poweroff();
             }
         }
@@ -3012,6 +3086,7 @@ async fn control_loop<T: RobotIo>(
                     intents.set_enabled(false);
                     bringup = Bringup::Limp;
                     powered_off = true;
+                    vettally.power_off();
                     poweroff();
                 }
                 _ => {}
@@ -3213,7 +3288,7 @@ async fn control_loop<T: RobotIo>(
             && !pickup_paused
             && twist_target == [0.0; 3]
             && twist_ema.iter().all(|v| v.abs() < 1e-3)
-            && snapshot.head_age >= idle_head::IDLE_AFTER
+            && snapshot.head_age >= idle_head.after()
             && chorale_head.iter().all(|v| v.abs() < 1e-3)
             && performer.is_none()
             && sing_head.iter().all(|v| v.abs() < 1e-3)
@@ -3978,12 +4053,14 @@ async fn control_loop<T: RobotIo>(
             .performing
             .store(performer.is_some(), Ordering::Relaxed);
 
-        // The mouth is not part of any policy; the intent is the only thing that moves it.
+        // The mouth is not part of any policy; the intent, and the idle yawn, are what move it.
         // Only while driving — a held or homing robot keeps whatever its hold pose says, so
         // a restart cannot snap a mouth.
+        // An idle yawn opens it further than a client asked, never less: the yawn only runs
+        // while nothing asks the robot to move, and a client holding the beak open keeps it so.
         if driving && theremin_state.is_none() && chorale_state.is_none() && sing_state.is_none() {
             targets[duck_control::model::MOUTH_INDEX] =
-                duck_control::model::mouth_target(snapshot.mouth);
+                duck_control::model::mouth_target(snapshot.mouth.max(idle.mouth));
         }
 
         // The next feature row pairs its reading with this command.
@@ -4001,6 +4078,25 @@ async fn control_loop<T: RobotIo>(
             Ok(applied) => limits.extend(applied.limits),
             Err(e) => tracing::warn!(error = %e, "bus write failed"),
         }
+
+        vettally.tick(&vetbook::Facts {
+            dt,
+            torqued: bringup != Bringup::Limp && !powered_off,
+            label: &policy_label,
+            twist: command.twist,
+            in_hands: pickup_paused,
+            fallen: safety.fallen(),
+            limp_falling: matches!(limp_fall, LimpFall::Limp { .. }),
+            theremin: theremin_state.is_some(),
+            singing: chorale_state.as_ref().is_some_and(|c| c.part.is_some()),
+            odom: (odometry.position(), odometry.yaw()),
+            fresh: fresh.as_ref(),
+            overran: tick_start.elapsed() > period,
+            flashlight: state.flashlight.load(Ordering::Relaxed) != 0,
+            // What a client asked the beak to do, or the chorale singing through it.
+            mouth: snapshot.mouth.max(chorale_mouth),
+            sounds_played: voice.as_ref().map(|v| v.played()),
+        });
 
         // Only assemble a frame when somebody is subscribed. On a robot nobody usually is,
         // and this would otherwise be a per-tick allocation on the thread that should not
@@ -4086,7 +4182,30 @@ async fn control_loop<T: RobotIo>(
             window_start = Instant::now();
             window_ticks = 0;
 
-            publish_slow_sensors(&mut safety, &state);
+            let temps = publish_slow_sensors(&mut safety, &state);
+            let volts = f64::from_bits(state.battery_v.load(Ordering::Relaxed));
+            vettally.slow(
+                temps.as_ref(),
+                volts,
+                f64::from_bits(state.cpu_temp_c.load(Ordering::Relaxed)),
+                state
+                    .cpu_throttle
+                    .load()
+                    .as_ref()
+                    .is_some_and(|t| t.khz < t.max_khz),
+                window.as_secs_f64(),
+            );
+            // The servos' latched alerts, for the vet book. A third small transaction, so not on
+            // every second: a latch holds until a reboot, and ten seconds cannot miss one.
+            if last_alert_read.elapsed() >= vetbook::ALERT_INTERVAL {
+                last_alert_read = Instant::now();
+                match safety.hardware_errors() {
+                    Ok(Some(alerts)) => vettally.alerts(&alerts),
+                    Ok(None) => {}
+                    Err(e) => tracing::debug!(error = %e, "vet book: hardware error read failed"),
+                }
+            }
+            vettally.handoff(&state.vetbook, volts, false);
             if let Some(volume) = volume.as_mut() {
                 volume.poll();
             }
@@ -4120,6 +4239,12 @@ async fn control_loop<T: RobotIo>(
             }
         }
     }
+    // The last second's counting, waiting for the book this once: the loop has no deadline left.
+    vettally.handoff(
+        &state.vetbook,
+        f64::from_bits(state.battery_v.load(Ordering::Relaxed)),
+        true,
+    );
     tracing::info!("control loop stopped");
 }
 
@@ -4222,7 +4347,11 @@ fn limit_name(limit: duck_control::safety::Limit) -> &'static str {
 /// the bus: a transaction issued from the IPC side would interleave bytes with a tick and
 /// corrupt both. The IMU counters come from the same `io`, so they are mirrored here rather
 /// than reached for from the socket.
-fn publish_slow_sensors<T: RobotIo>(io: &mut Safety<T>, state: &RobotState) {
+/// Returns this sample's per-joint temperatures, `None` when the bus read missed.
+fn publish_slow_sensors<T: RobotIo>(
+    io: &mut Safety<T>,
+    state: &RobotState,
+) -> Option<[f64; NUM_JOINTS]> {
     let stale = io.imu_stale();
     state.imu_stale_blocks.store(stale.total, Ordering::Relaxed);
     state.imu_stale_run.store(stale.run, Ordering::Relaxed);
@@ -4276,14 +4405,17 @@ fn publish_slow_sensors<T: RobotIo>(io: &mut Safety<T>, state: &RobotState) {
             state
                 .motor_torque_enabled
                 .store(slow.torque_enabled.map(std::sync::Arc::new));
+            Some(slow.temps_c)
         }
         // Keep the last battery and thermal samples. A single failed transaction is ordinary
         // on a serial bus, and dropping those readings to "unknown" over one would make them
         // flicker. Torque is different: callers use its *current register state* to confirm a
-        // safety boundary, so a missed slow poll clears it rather than serving stale bits.
+        // safety boundary, so a missed slow poll clears it rather than serving stale bits. A bus
+        // that is really gone already shows up in the verdict and in `bus.consecutive_errors`.
         Err(e) => {
             state.motor_torque_enabled.store(None);
             tracing::debug!(error = %e, "slow-sensor read failed; keeping battery and thermals, clearing torque readback");
+            None
         }
     }
 }
@@ -5427,6 +5559,7 @@ fn dispatch(
                 ),
                 Some(mode) => {
                     intents.request_mode_switch(mode_code(mode));
+                    state.vetbook.bump(proto::vetbook::key::GAIT_CHANGES, 1.0);
                     proto::IntentResult::accepted()
                 }
             };
@@ -5466,6 +5599,22 @@ fn dispatch(
                         .is_some_and(|(_, calibrated)| *calibrated),
                 },
             )
+        }
+
+        // The vet book, as of the loop's last handoff — at most a second behind.
+        proto::Call::RobotVetbook => proto::Response::ok(Some(id), &state.vetbook.snapshot()),
+        // Another daemon's counts: photos, laser sweep. Accepted and merged, never refused — a
+        // name the cards do not know yet is kept until one does.
+        proto::Call::RobotVetbookTally(p) => {
+            state.vetbook.tally(p);
+            proto::Response::ok(Some(id), &proto::IntentResult::accepted())
+        }
+        proto::Call::RobotVetbookNote(p) => {
+            let result = match state.vetbook.note(&p.text) {
+                Ok(()) => proto::IntentResult::accepted(),
+                Err(e) => proto::IntentResult::refused(e),
+            };
+            proto::Response::ok(Some(id), &result)
         }
 
         proto::Call::RobotPolicies => proto::Response::ok(
@@ -5508,7 +5657,11 @@ fn dispatch(
         }
 
         proto::Call::RobotLoadPolicy(p) => {
-            proto::Response::ok(Some(id), &load_policy_request(p, state, intents))
+            let result = load_policy_request(p, state, intents);
+            if result.accepted {
+                state.vetbook.bump(proto::vetbook::key::GAIT_CHANGES, 1.0);
+            }
+            proto::Response::ok(Some(id), &result)
         }
 
         // Re-read every slot, whatever the paths say.
@@ -6275,29 +6428,29 @@ mod tests {
 
         let off = bind_pad_request(
             &proto::PadBindParams {
-                button: "lb".to_owned(),
+                button: "b".to_owned(),
                 skill: Some(String::new()),
             },
             &state,
         );
         assert!(off.accepted, "{off:?}");
         assert_eq!(
-            params::edit::pad_bindings(&state.config_path).unwrap().lb,
+            params::edit::pad_bindings(&state.config_path).unwrap().b,
             "",
             "switched off"
         );
 
         let back = bind_pad_request(
             &proto::PadBindParams {
-                button: "lb".to_owned(),
+                button: "b".to_owned(),
                 skill: None,
             },
             &state,
         );
         assert!(back.accepted, "{back:?}");
         assert_eq!(
-            params::edit::pad_bindings(&state.config_path).unwrap().lb,
-            "kick_left",
+            params::edit::pad_bindings(&state.config_path).unwrap().b,
+            "ground_pick",
             "back to what the robot ships with"
         );
     }
@@ -6309,8 +6462,8 @@ mod tests {
         let (_dir, state) = state_over("");
         let result = bind_pad_request(
             &proto::PadBindParams {
-                button: "lb".to_owned(),
-                skill: Some("kick_left".to_owned()),
+                button: "b".to_owned(),
+                skill: Some("ground_pick".to_owned()),
             },
             &state,
         );

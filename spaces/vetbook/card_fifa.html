@@ -1,0 +1,81 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* fifa: an Ultimate Team card under stadium lights — overall and position, the duck as the player,
+   six attributes from the book; beside it, what each number was earned with. A prototype. */
+.fifa { color: #fff; font-family: "Barlow Condensed", sans-serif;
+  background: radial-gradient(ellipse at 28% 0%, #ffffff33, transparent 45%), radial-gradient(ellipse at 80% 0%, #ffffff1f, transparent 40%), linear-gradient(180deg, #0b1630 0%, #13254d 58%, #0f5a33 58.2%, #0b4227 100%); }
+.fifa::before { content: ""; position: absolute; left: 0; right: 0; top: 58%; bottom: 0; background: repeating-linear-gradient(90deg, #ffffff08 0 80px, transparent 80px 160px); }
+.fifa::after { content: ""; position: absolute; left: 50%; top: 66%; width: 420px; height: 140px; border: 3px solid #ffffff22; border-radius: 50%; transform: translateX(-10%); }
+.fifa .beam { position: absolute; top: -40px; width: 140px; height: 520px; background: linear-gradient(180deg, #ffffff40, transparent); transform-origin: top center; filter: blur(6px); }
+
+/* the card: tier colours */
+.fifa .fut { --c1: #f9e88a; --c2: #e6bf4f; --c3: #b5852a; --ink: #3a2a0a; --line: #3a2a0a33; }
+.fifa .fut.silver { --c1: #f4f6f9; --c2: #c9d0da; --c3: #8d97a5; --ink: #252b34; --line: #252b3433; }
+.fifa .fut.bronze { --c1: #f2c39c; --c2: #c9814f; --c3: #8a4f2a; --ink: #351a0b; --line: #351a0b33; }
+.fifa .fut.icon { --c1: #fffdf2; --c2: #f3e3b3; --c3: #d7b45e; --ink: #3a2f10; --line: #3a2f1033; }
+.fifa .fut { position: absolute; left: 110px; top: 22px; width: 400px; height: 588px; filter: drop-shadow(0 20px 30px #0009); }
+.fifa .face { position: absolute; inset: 0; background: linear-gradient(155deg, var(--c1) 0%, var(--c2) 45%, var(--c3) 100%); color: var(--ink);
+  clip-path: polygon(50% 0, 64% 3%, 100% 3%, 100% 84%, 50% 100%, 0 84%, 0 3%, 36% 3%); }
+.fifa .face::before { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(115deg, #ffffff22 0 2px, transparent 2px 18px), radial-gradient(ellipse at 30% 10%, #ffffff88, transparent 55%); }
+.fifa .face::after { content: ""; position: absolute; inset: 14px; clip-path: inherit; border: 2px solid var(--line); }
+.fifa .ovr { position: absolute; left: 44px; top: 54px; font: 800 82px/0.9 "Barlow Condensed"; }
+.fifa .pos { position: absolute; left: 50px; top: 136px; font: 700 30px "Barlow Condensed"; letter-spacing: .04em; }
+.fifa .nation { position: absolute; left: 48px; top: 182px; width: 46px; height: 30px; border-radius: 3px; background: linear-gradient(180deg, #ff8a3d 0 33%, #fff 33% 66%, #b8a4e0 66%); box-shadow: 0 0 0 2px var(--line); }
+.fifa .club { position: absolute; left: 52px; top: 226px; width: 40px; height: 46px; background: var(--ink); color: var(--c1); clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%); display: grid; place-items: center; padding-bottom: 8px; font: 800 18px "Barlow Condensed"; }
+.fifa .player { position: absolute; left: 116px; top: 66px; width: 250px; filter: drop-shadow(0 8px 10px #0004); }
+.fifa .name { position: absolute; left: 30px; right: 30px; top: 300px; text-align: center; font: 800 46px/1 "Barlow Condensed"; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; }
+.fifa .rule { position: absolute; left: 60px; right: 60px; height: 2px; background: var(--line); }
+.fifa .attrs { position: absolute; left: 62px; right: 62px; top: 368px; display: grid; grid-template-columns: 1fr 1fr; column-gap: 34px; row-gap: 4px; }
+.fifa .attrs div { display: flex; gap: 12px; align-items: baseline; font: 800 38px/1.12 "Barlow Condensed"; }
+.fifa .attrs span { font: 600 30px "Barlow Condensed"; letter-spacing: .03em; }
+.fifa .attrs .col2 { border-left: 2px solid var(--line); padding-left: 22px; }
+.fifa .chem { position: absolute; left: 0; right: 0; top: 508px; text-align: center; font: 700 16px "Barlow Condensed"; letter-spacing: .2em; opacity: .7; }
+
+/* beside it */
+.fifa .side { position: absolute; left: 580px; right: 50px; top: 40px; z-index: 2; }
+.fifa .eyebrow { display: inline-block; font: 800 20px "Barlow Condensed"; letter-spacing: .24em; color: #0b1630; background: linear-gradient(90deg, #f9e88a, #e6bf4f); padding: 4px 14px; border-radius: 3px; }
+.fifa .side h2 { margin: 10px 0 0; font: 800 72px/0.95 "Barlow Condensed"; text-transform: uppercase; white-space: nowrap; }
+.fifa .side .club-line { font: 600 26px "Barlow Condensed"; color: #c9d4f0; letter-spacing: .03em; }
+.fifa .earned { margin-top: 16px; display: grid; grid-template-columns: 64px 1fr; row-gap: 3px; font: 600 23px "Barlow Condensed"; color: #dfe6f7; }
+.fifa .earned b { font-weight: 800; color: #f9e88a; }
+.fifa .mood { margin-top: 14px; font: 700 26px "Barlow Condensed"; color: #fff; }
+.fifa .mood span { color: #9fe3b8; }
+.fifa .styles { margin-top: 12px; display: flex; gap: 14px; }
+.fifa .styles .badge .ribbon { font-family: "Barlow Condensed"; font-weight: 700; letter-spacing: .03em; }
+{% endblock %}
+{% block card %}
+  <div class="beam" style="left:120px;transform:rotate(18deg)"></div>
+  <div class="beam" style="left:960px;transform:rotate(-20deg)"></div>
+  <div class="fut {{ c.fut.tier }}">
+    <div class="face">
+      <div class="ovr">{{ c.fut.overall }}</div>
+      <div class="pos">{{ c.fut.position }}</div>
+      <div class="nation" title="microduck"></div>
+      <div class="club">{{ c.owner[:1]|upper }}</div>
+      <img class="sticker player" src="{{ sticker }}" alt="">
+      <div class="name fit">{{ c.robot }}</div>
+      <div class="rule" style="top:356px"></div>
+      <div class="attrs">
+        {% for code, value in c.fut.attributes[:3] %}<div><b>{{ value }}</b><span>{{ code }}</span></div><div class="col2"><b>{{ c.fut.attributes[loop.index0 + 3][1] }}</b><span>{{ c.fut.attributes[loop.index0 + 3][0] }}</span></div>{% endfor %}
+      </div>
+      <div class="rule" style="top:498px"></div>
+      <div class="chem">POLLEN LEAGUE</div>
+    </div>
+  </div>
+  <div class="side">
+    <div class="eyebrow">{{ {"icon": "ICON", "gold": "GOLD RARE", "silver": "SILVER", "bronze": "BRONZE"}[c.fut.tier] }} · NEW CARD</div>
+    <h2 class="fit">{{ c.robot }}</h2>
+    <div class="club-line">@{{ c.owner }} FC · Pollen League · day {{ c.day }}</div>
+    <div class="earned">
+      <b>SPD</b><span>top speed {{ "%.2f"|format(c.records.top_speed_kmh) }} km/h</span>
+      <b>WLK</b><span>{{ c.walked }} {{ c.walked_unit }} walked</span>
+      <b>HUG</b><span>{{ c.cuddles }} cuddles, {{ c.pets }} pets</span>
+      <b>BAL</b><span>{{ c.records.walk_streak_m|round|int }} m without a fall, leaned {{ c.records.tilt_deg|round|int }}°</span>
+      <b>TRK</b><span>{% if c.favourite %}{{ c.favourite }} ×{{ c.favourite_count }}{% else %}no tricks yet{% endif %}</span>
+      <b>STA</b><span>{{ c.awake }} awake</span>
+    </div>
+    <div class="mood">{{ c.status.title }} <span>· {{ c.status.line }}</span></div>
+    <div class="badges-inline styles">{% for b in c.badges[:4] %}{{ m.badge(b, 64) }}{% endfor %}</div>
+  </div>
+{% endblock %}

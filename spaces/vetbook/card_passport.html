@@ -1,0 +1,54 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* passport: an open booklet — the identity page on the left, the badges as visa stamps on the right */
+.passport { --cover: #7a2a3a; --page: #f7f1e3; --line: #c9b99a; --ink: #3a2f2a; background: #2c2430; }
+.passport.pal1 { --cover: #1f4a5a; --page: #eef5ef; --line: #a9c3b2; }
+.passport.pal2 { --cover: #3d2e6b; --page: #f3f0fa; --line: #bdb3d8; }
+.passport.pal3 { --cover: #6b4a1f; --page: #fbf3e2; --line: #d6c39a; }
+.passport .book { position: absolute; left: 40px; top: 30px; right: 40px; bottom: 30px; background: var(--cover); border-radius: 22px; padding: 14px; box-shadow: 0 16px 40px #0007; }
+.passport .pages { position: absolute; inset: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: 12px; overflow: hidden; }
+.passport .page { position: relative; background: var(--page); background-image: repeating-linear-gradient(135deg, #0000 0 14px, #00000006 14px 15px); padding: 26px 30px; color: var(--ink); }
+.passport .page.left { border-right: 2px solid #0001; box-shadow: inset -20px 0 30px -20px #0003; }
+.passport .page.right { box-shadow: inset 20px 0 30px -20px #0003; }
+.passport .kicker { font: 700 15px "Space Mono"; letter-spacing: .2em; color: #8a7a6a; }
+.passport .photo { position: absolute; left: 30px; top: 66px; width: 200px; height: 220px; background: #e9e1cf; border: 2px solid var(--line); display: grid; place-items: center; }
+.passport .photo .sticker { position: relative; width: 186px; filter: grayscale(.15) contrast(1.05); }
+.passport dl { position: absolute; left: 254px; right: 24px; top: 62px; margin: 0; display: grid; gap: 4px; }
+.passport dt { font: 700 12px "Space Mono"; color: #8a7a6a; letter-spacing: .1em; text-transform: uppercase; }
+.passport dd { margin: 0 0 6px; font: 400 22px "Mochiy Pop One"; white-space: nowrap; }
+.passport .mrz { position: absolute; left: 24px; right: 24px; bottom: 22px; font: 700 18px/1.35 "Space Mono"; letter-spacing: .14em; color: #3a2f2acc; white-space: nowrap; overflow: hidden; }
+.passport .stamps { position: absolute; inset: 60px 24px 90px 24px; }
+.passport .stamp { position: absolute; border: 4px solid var(--sc); color: var(--sc); border-radius: var(--rad, 14px); padding: 8px 14px; transform: rotate(var(--r)); text-align: center; mix-blend-mode: multiply; opacity: .85; }
+.passport .stamp b { display: block; font: 400 21px "Mochiy Pop One"; white-space: nowrap; }
+.passport .stamp span { font: 700 13px "Space Mono"; letter-spacing: .12em; }
+.passport .entry { position: absolute; right: 26px; bottom: 26px; font: 700 15px "Space Mono"; color: #8a7a6a; text-align: right; }
+{% endblock %}
+{% block card %}
+  <div class="book"><div class="pages">
+    <div class="page left">
+      <div class="kicker">MICRODUCK · PASSPORT · Nº {{ c.number }}</div>
+      <div class="photo"><img class="sticker" src="{{ sticker }}" alt=""></div>
+      <dl>
+        <dt>name</dt><dd class="fit">{{ c.robot }}</dd>
+        <dt>owner</dt><dd class="fit">@{{ c.owner }}</dd>
+        <dt>date of hatching</dt><dd>{{ c.birthday }}</dd>
+        <dt>sign · nature</dt><dd class="fit">{{ c.sign or "—" }} · {{ c.personality }}</dd>
+      </dl>
+      <div class="mrz">{{ "P<DUCK" ~ c.robot|upper|replace("-", "<")|replace(" ", "<") ~ "<<" ~ c.owner|upper ~ "<<<<<<<<<<<<<<<<<<<<" }}<br>{{ c.number ~ "DUCK" ~ c.walked|replace(".", "") ~ "KM" ~ c.falls ~ "F" ~ c.cuddles ~ "C<<<<<<<<<<<<<<<<<<<" }}</div>
+    </div>
+    <div class="page right">
+      <div class="kicker">VISAS · ENTRIES</div>
+      <div class="stamps">
+        {% set spots = [(10,6,-8,"14px"),(270,0,7,"50%"),(30,150,5,"50%"),(285,165,-6,"14px"),(140,300,-3,"14px")] %}
+        {% for b in c.badges[:5] %}
+        {% set x, y, r, rad = spots[loop.index0] %}
+        <div class="stamp" style="left:{{ x }}px;top:{{ y }}px;--r:{{ r }}deg;--sc:{{ b.colour }};--rad:{{ rad }}"><b>{{ b.glyph }} {{ b.name }}</b><span>APPROVED · DAY {{ c.day }}</span></div>
+        {% else %}
+        <div class="stamp" style="left:80px;top:120px;--r:-6deg;--sc:#3fae8f"><b>✿ First trip</b><span>EVERY DUCK STARTS HERE</span></div>
+        {% endfor %}
+      </div>
+      <div class="entry">{{ c.walked }} {{ c.walked_unit }} travelled<br>{{ c.status.title|lower }}</div>
+    </div>
+  </div></div>
+{% endblock %}

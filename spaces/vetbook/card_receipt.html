@@ -1,0 +1,54 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* receipt: a thermal print from the vet clinic, on a pastel counter, with the patient beside it */
+.receipt { --bg1: #ffe3ec; --bg2: #ffd0de; --accent: #e2506e; background: radial-gradient(circle at 80% 30%, var(--bg1), var(--bg2)); color: #3b3340; }
+.receipt.pal1 { --bg1: #dff6ee; --bg2: #c4ecdd; --accent: #2f9a8a; }
+.receipt.pal2 { --bg1: #ece4ff; --bg2: #ddd0ff; --accent: #7656dc; }
+.receipt.pal3 { --bg1: #fff0d6; --bg2: #ffdcb8; --accent: #e5862a; }
+.receipt .paper { position: absolute; left: 70px; top: -8px; width: 470px; height: 646px; background: #fffdf8; transform: rotate(-3deg); box-shadow: 8px 10px 24px #0003; padding: 34px 38px; font: 400 19px/1.45 "Space Mono", monospace;
+  -webkit-mask: radial-gradient(circle 9px at 50% 100%, #0000 98%, #000) 50% 100% / 22px 100% repeat-x; }
+.receipt .paper h3 { margin: 0; text-align: center; font: 700 26px "Space Mono"; letter-spacing: .06em; }
+.receipt .paper .sub { text-align: center; font-size: 15px; color: #8a8090; margin-bottom: 10px; }
+.receipt .rule { border-top: 2px dashed #3b334055; margin: 8px 0; }
+.receipt .row { display: flex; gap: 8px; white-space: nowrap; }
+.receipt .row span:first-child { flex: none; }
+.receipt .row i { flex: 1; overflow: hidden; color: #3b334044; font-style: normal; }
+.receipt .row i::before { content: "................................................................"; }
+.receipt .row b { flex: none; font-weight: 700; }
+.receipt .total { font: 700 24px "Space Mono"; }
+.receipt .barcode { height: 46px; margin: 12px auto 4px; width: 300px; background: repeating-linear-gradient(90deg, #3b3340 0 3px, transparent 3px 5px, #3b3340 5px 6px, transparent 6px 10px, #3b3340 10px 14px, transparent 14px 16px); }
+.receipt .thanks { text-align: center; font: 700 16px "Space Mono"; }
+.receipt .side { position: absolute; left: 600px; right: 40px; top: 40px; }
+.receipt .side .sticker { position: relative; width: 330px; margin: 0 0 0 60px; transform: rotate(4deg); }
+.receipt .side h2 { margin: 6px 0 0; font: 400 46px/1.05 "Mochiy Pop One"; color: var(--accent); white-space: nowrap; }
+.receipt .side p { margin: 6px 0 14px; font: 700 20px "Zen Maru Gothic"; color: #6b5a6e; }
+.receipt .side .badges-inline { gap: 14px; }
+{% endblock %}
+{% block card %}
+  <div class="paper">
+    <h3>MICRODUCK VET CLINIC</h3>
+    <div class="sub">check-up · day {{ c.day }} · Nº {{ c.number }}</div>
+    <div class="rule"></div>
+    <div class="row"><span>PATIENT</span><i></i><b class="fit" style="max-width:250px">{{ c.robot|upper }}</b></div>
+    <div class="row"><span>OWNER</span><i></i><b>@{{ c.owner }}</b></div>
+    <div class="rule"></div>
+    <div class="row"><span>WALKED</span><i></i><b>{{ c.walked }} {{ c.walked_unit|upper }}</b></div>
+    <div class="row"><span>AWAKE</span><i></i><b>{{ c.awake|upper }}</b></div>
+    <div class="row"><span>OOPSIE FALLS</span><i></i><b>{{ c.falls }}</b></div>
+    <div class="row"><span>PETS</span><i></i><b>{{ c.pets }}</b></div>
+    <div class="row"><span>SPINS</span><i></i><b>{{ c.spins }}</b></div>
+    {% if c.favourite %}<div class="row"><span>{{ c.favourite|upper }}</span><i></i><b>×{{ c.favourite_count }}</b></div>{% endif %}
+    <div class="row"><span>NEW SERVOS</span><i></i><b>{{ c.servos_replaced }}</b></div>
+    <div class="rule"></div>
+    <div class="row total"><span>TOTAL CUDDLES</span><i></i><b>{{ c.cuddles }}</b></div>
+    <div class="barcode"></div>
+    <div class="thanks">♡ {{ c.status.title|upper }} ♡</div>
+  </div>
+  <div class="side">
+    <img class="sticker" src="{{ sticker }}" alt="">
+    <h2 class="fit">{{ c.robot }}</h2>
+    <p>{{ c.status.line }}{% if c.facts %} · {{ c.facts[0] }}{% endif %}</p>
+    <div class="badges-inline">{% for b in c.badges[:4] %}{{ m.badge(b, 70) }}{% endfor %}</div>
+  </div>
+{% endblock %}

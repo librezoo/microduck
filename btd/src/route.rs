@@ -367,6 +367,11 @@ fn permits(call: &proto::Call) -> bool {
         // Static geometry, read-only; the same class of read as the one above.
         RobotModel => true,
 
+        // The vet book: the robot's lifetime record, read once when somebody opens the page — the
+        // app is its obvious reader. A note is a dated line of text from a PIN-bonded phone in the
+        // room; it moves nothing and cannot push a servo's history out of the book.
+        RobotVetbook | RobotVetbookNote(_) => true,
+
         // Re-reading the slots after something else edited the config. Same blast radius as
         // `robot.loadPolicy` and the same answer, and a client that can load wants this for the
         // case where the file changed underneath it.
@@ -420,6 +425,13 @@ fn permits(call: &proto::Call) -> bool {
         // with a token. That is what makes an iPhone dropping the GATT link mid-flow a
         // non-event rather than a lost login.
         AccountLogin(_) | AccountStatus | AccountLogout => true,
+
+        // Sharing the vet book is the phone's job more than anyone's: the share sheet that posts
+        // the card is on the phone. PIN-bonded and in the room, like the login it depends on, and
+        // the reply is a link and a dataset name — a few hundred bytes.
+        VetbookShare => true,
+        // Daemon-to-daemon: how `mediad` and `tofd` report to the book. Nothing a phone sends.
+        RobotVetbookTally(_) => false,
 
         // **Standing the robot up, which is how anything else here starts.**
         //

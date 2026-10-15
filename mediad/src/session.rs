@@ -126,6 +126,8 @@ pub async fn run(
     mut pool: Pool,
     media: Option<Media>,
 ) {
+    // A peer that came with the video is a visit, and how long it stays is video streamed.
+    let _visit = media.is_some().then(crate::vetbook::visit);
     while let Some(line) = inbound.recv().await {
         let line = line.trim().to_string();
         if line.is_empty() {

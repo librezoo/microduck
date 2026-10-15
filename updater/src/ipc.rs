@@ -127,6 +127,9 @@ pub struct Server {
     /// must stay answerable *during* one — `account.status` is polled while a login is in
     /// flight, and queueing that behind a download would make a wizard look stuck.
     account: Arc<crate::account::Account>,
+
+    /// Where `vetbook.share` asks for the book and the robot's name.
+    vetbook: crate::vetbook::Sources,
 }
 
 impl Server {
@@ -165,7 +168,14 @@ impl Server {
             allow_gids,
             forced_owner_uid: None,
             account: Arc::new(crate::account::account_at(token_path)),
+            vetbook: crate::vetbook::Sources::default(),
         }
+    }
+
+    /// Where `vetbook.share` finds `robotd` and `configd`, when not at their default sockets.
+    pub fn with_vetbook_sources(mut self, sources: crate::vetbook::Sources) -> Self {
+        self.vetbook = sources;
+        self
     }
 
     /// Point the account at a token file and a Hugging Face of your choosing.
@@ -693,6 +703,12 @@ impl Server {
                 Ok(was) => Response::ok(Some(id), &crate::account::logout_result(was)),
                 Err(e) => Response::err(Some(id), crate::Error::from(e).to_rpc_error()),
             },
+            // No engine lock, like the account: it reads two daemons and talks to the Hub, and
+            // touches nothing an update owns.
+            Call::VetbookShare => match crate::vetbook::share(&self.account, &self.vetbook).await {
+                Ok(result) => Response::ok(Some(id), &result),
+                Err(e) => Response::err(Some(id), e.to_rpc_error()),
+            },
 
             // Read-only and no engine lock: asking the Hub what exists changes nothing here.
             Call::PolicySearch(params) => match crate::policy::search(&params.query).await {
@@ -807,6 +823,9 @@ impl Server {
             | Call::RobotPolicies
             | Call::RobotModel
             | Call::RobotCalibrationInfo
+            | Call::RobotVetbook
+            | Call::RobotVetbookNote(_)
+            | Call::RobotVetbookTally(_)
             | Call::RobotLoadPolicy(_)
             | Call::RobotReloadPolicies
             | Call::RobotSubscribe(_) => Response::err(

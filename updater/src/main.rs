@@ -540,6 +540,11 @@ async fn serve(args: Args) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let (config, keys, robot, faults) = (loaded.config, loaded.keys, loaded.robot, loaded.faults);
+    // `vetbook.share` reads the book from the same `robotd` the engine talks to.
+    let vetbook_robot_socket = args
+        .robot_socket
+        .clone()
+        .unwrap_or_else(|| config.robot_socket.clone());
 
     // Read before `config` is moved into the engine.
     let config_check_interval = config.check_interval;
@@ -615,12 +620,13 @@ async fn serve(args: Args) -> ExitCode {
     let check_interval = config_check_interval;
     let auto_apply = config_auto_apply;
 
-    let server = std::sync::Arc::new(updater::ipc::Server::with_policy_at(
-        engine,
-        allow_uids,
-        allow_gids,
-        args.token.clone(),
-    ));
+    let server = std::sync::Arc::new(
+        updater::ipc::Server::with_policy_at(engine, allow_uids, allow_gids, args.token.clone())
+            .with_vetbook_sources(updater::vetbook::Sources {
+                robot_socket: vetbook_robot_socket,
+                ..Default::default()
+            }),
+    );
     let socket = args.socket.clone();
 
     // Unconditional, unlike the update scheduler below: a Hugging Face token lasts thirty days

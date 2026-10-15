@@ -236,6 +236,12 @@ doing before a duck goes home with anybody, because the failure mode is asymmetr
 has been able to write all along cannot be un-done, while a robot that needs a wider scope later
 just asks for one.
 
+**One feature now uses the write scope: sharing the vet book** (`vetbook.share`,
+`updater/src/vetbook.rs`) creates and commits to a public dataset on the owner's account. Narrowing
+the client to `openid profile read-repos` would end that; the alternative already weighed is the
+robot proving its owner to the `microduck-vetbook` Space, and the Space holding the books in a
+Pollen-owned dataset instead of the owner's.
+
 ### 2.5 Where the token lives, and who writes it
 
 `/etc/robot/hf-token`, `root:robot`, `0640`. JSON: the access token, the refresh token, an

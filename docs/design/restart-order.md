@@ -7,9 +7,9 @@ three different documents, and the answer decides how a skew is diagnosed.
 Everything here is read from the code, and each step names the function that owns it. Where a
 narrative comment elsewhere disagrees with this page, the comment is the bug.
 
-## 1. The seven daemons, and the unit that is not one
+## 1. The eight daemons, and the unit that is not one
 
-A release ships seven daemons — `robotd`, `configd`, `btd`, `padd`, `mediad`, `tofd`, `updaterd` —
+A release ships eight daemons — `robotd`, `configd`, `btd`, `padd`, `netpadd`, `mediad`, `tofd`, `updaterd` —
 each `ExecStart`ing a path under `/opt/robot/daemon/current/bin/`, so each is stale the instant the
 symlink moves, and each is either restarted by the update or restarted after it.
 
@@ -23,6 +23,7 @@ no `[Install]` section, and that is what keeps it out — see §1.1.
 | `robotd` | yes | — |
 | `configd` | yes | — |
 | `padd` | if already running (`try-restart`) | — |
+| `netpadd` | if already running (`try-restart`) | — |
 | `mediad` | if already running (`try-restart`) | — |
 | `tofd` | if already running (`try-restart`) | — |
 | `updaterd` | **never** — it is the process performing the update | yes |
@@ -75,10 +76,10 @@ two units an update cannot touch are exactly the two it exists to watch.
 On today's release `units_to_restart` is exactly:
 
 ```
-configd, mediad, padd, robotd, tofd
+configd, mediad, netpadd, padd, robotd, tofd
 ```
 
-in that order — alphabetical, so the order is identical on every board and in every test. Nothing
+in that order — alphabetical, so the order is identical on every board and in every test. Exactly one of `padd` and `netpadd` runs, chosen by `ExecCondition=` on `[netpad] enabled` — `netpadd/systemd/netpadd.service` says why that and not `Conflicts=` — so the restart order between them does not matter. Nothing
 was added to `deploy/updater.toml` to put `mediad` and `tofd` in that list, and nothing needed to
 be: both ship a unit with an `[Install]` section, which is the whole rule.
 
@@ -122,7 +123,7 @@ onto the release carrying it. This cost a confused round of "the hook ran and lo
 | 9 | arm the boot counter (`pending.json`), *before* the swap | no |
 | 10 | swap `current` → `releases/<ver>` | no |
 | 11 | **`hooks/postinstall`** (cwd = `releases/<ver>`) | **starts newly shipped units** |
-| 12 | `on_apply` — force-restart configured units and `try-restart` other shipped units, one at a time | **configd, robotd; mediad, padd, tofd if running** |
+| 12 | `on_apply` — force-restart configured units and `try-restart` other shipped units, one at a time | **configd, robotd; mediad, padd, netpadd, tofd if running** |
 | 13 | `releases/<ver>/bin/updaterd --self-test` | no |
 | 14 | health gate: poll `robotd` over its socket, every 500 ms, up to 30 s | no |
 | 15 | confirm the boot counter, prune old releases | no |
@@ -250,13 +251,17 @@ Because `select` and the reverts skip `hooks/postinstall`, they also never *remo
 downgrade to a release predating a daemon leaves that daemon's unit installed, pointing at a binary
 the older release does not contain; the unit fails, and since it is in the restart set, the failed
 restart fails the transition (`../project/install-path-gap.md`).
+The unit files that stay behind must also work with the older binaries `current` now points at:
+`padd.service` asks `padd --should-run` only when the active release ships `netpadd`, because an
+older `padd` has no such flag, and a condition that exits 2 is a skip, not a failure — a rollback
+would leave the robot with no pad and nothing saying so.
 
 ## 4. At boot
 
 systemd starts the daemons from `multi-user.target`, and `robot-boot-check.timer` arms the
-recovery check for 180 seconds in. There is **no ordering between the daemons**
-beyond `padd` after `robotd` (advisory — `padd` exits and retries every 5 s if the socket is absent)
-and `btd` after `dbus`/`bluetooth`. Nothing waits on `updaterd`, and `updaterd` waits on nothing but
+recovery check for 180 seconds in. There is **no ordering between the daemons** beyond `padd` and
+`netpadd` after `robotd` (advisory — each exits and retries every 5 s if the socket is absent) and
+`btd` after `dbus`/`bluetooth`. Nothing waits on `updaterd`, and `updaterd` waits on nothing but
 `network-online.target`, which is `Wants` rather than `Requires`.
 
 On this board `hci0` does not exist until roughly 73 s after power-on, so `btd` retries for an
@@ -410,15 +415,15 @@ unchanged: a stopped unit and a daemon that published nothing are still not stal
    gamepad or no camera still updates and walks. Then `robot-boot-check.timer` is enabled *without*
    `--now`. Redundant with the hook and harmless; it is also the path for a release older than the
    hook. A unit the release ships that this function does not know is installed, reported, and left
-   alone. `tofd` is named as known but gets no `enable_unit` of its own: the hook enabled it a step
-   earlier and nothing depends on it, so there is no ordering for this function to have an opinion
+   alone. `tofd` and `netpadd` are named as known but get no `enable_unit` of their own: the hook enabled them a step
+   earlier and nothing depends on them, so there is no ordering for this function to have an opinion
    about.
 4. `install_token_dropin`: write the `GITHUB_TOKEN` drop-in, `daemon-reload`, and
    `systemctl try-restart updaterd` — `daemon-reload` alone would leave the *running* `updaterd`
    without the token, which is every board.
 
 `DUCK_FORCE_REINSTALL=1` adds `stop_for_reinstall` before step 2: `systemctl stop` on `padd`,
-`tofd`, `btd`, `configd`, `robotd`, `updaterd`, in that order. Nothing is live while the swap happens, and there is
+`netpadd`, `tofd`, `btd`, `configd`, `robotd`, `updaterd`, in that order. Nothing is live while the swap happens, and there is
 no health gate behind it.
 
 ## 7. Diagnosing a skew
@@ -428,7 +433,7 @@ Two version numbers are legitimately different at once, and which pair it is dec
 | observation | means |
 |---|---|
 | `updaterd` or `btd` behind the installed release, for a few seconds after an update | expected — the deferred restart has not fired yet |
-| `btd`, `robotd`, `configd`, `padd`, `mediad` or `tofd` disagreeing with `current` at all, persistently | the restart did not take effect *and* §5 did not fix it — so either `updaterd` has not restarted since, or its restart failed (journal, at `error`) |
+| `btd`, `robotd`, `configd`, `padd`, `netpadd`, `mediad` or `tofd` disagreeing with `current` at all, persistently | the restart did not take effect *and* §5 did not fix it — so either `updaterd` has not restarted since, or its restart failed (journal, at `error`) |
 | `updaterd` behind it, persistently | the deferred restart never landed, and §5 will not fix this one. `robotctl update apply daemon` repairs it — it reports `already_current` with `updaterd` in `stale` and schedules the restart. `systemctl restart updaterd` is the same fix by hand; either way the journal has why it did not land |
 | any daemon reporting `restarting` | it exited and systemd is bringing it back. For a few seconds after an update, that is the restart itself. Persistently, the daemon cannot start at all — `mediad` with the camera flex unplugged is the case this row exists for — and §5 leaves it alone, since a daemon that is not running has no identity to compare. `journalctl -u <name> -b` has why it exits |
 | any daemon reporting `failed` | it could not start and systemd has stopped retrying. Same journal, and unlike `stopped` nobody chose it |

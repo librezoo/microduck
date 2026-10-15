@@ -497,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "btd"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "bluer",
  "clap",
@@ -744,7 +744,7 @@ dependencies = [
 
 [[package]]
 name = "configd"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "async-trait",
  "clap",
@@ -1109,14 +1109,14 @@ dependencies = [
 
 [[package]]
 name = "duck-ble"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "uuid",
 ]
 
 [[package]]
 name = "duck-control"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "duck-ipc-proto",
  "libloading 0.8.9",
@@ -1132,7 +1132,7 @@ dependencies = [
 
 [[package]]
 name = "duck-detect"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1146,7 +1146,7 @@ dependencies = [
 
 [[package]]
 name = "duck-ether"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "duck-ipc-proto",
@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "duck-ipc-proto"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "libc",
  "semver",
@@ -1170,14 +1170,20 @@ dependencies = [
 
 [[package]]
 name = "duckctl"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "btleplug",
  "clap",
  "duck-ble",
  "duck-ipc-proto",
  "futures",
+ "gilrs",
+ "libdbus-sys",
+ "pad-map",
+ "ratatui",
  "serde_json",
+ "socket2",
+ "tempfile",
  "tokio",
  "webbrowser",
 ]
@@ -2527,7 +2533,7 @@ dependencies = [
 
 [[package]]
 name = "kinematics"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "roxmltree",
  "serde",
@@ -2719,7 +2725,7 @@ dependencies = [
 
 [[package]]
 name = "mediad"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2935,8 +2941,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
 
 [[package]]
+name = "netpadd"
+version = "0.17.3"
+dependencies = [
+ "clap",
+ "duck-ipc-proto",
+ "pad-map",
+ "robotd-params",
+ "serde_json",
+ "socket2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nfc"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "duck-ipc-proto",
@@ -3197,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "odometry"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "duck-ipc-proto",
  "kinematics",
@@ -3261,14 +3283,27 @@ checksum = "06503bb33f294c5f1ba484011e053bfa6ae227074bdb841e9863492dc5960d4b"
 
 [[package]]
 name = "pad-imu"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "duck-ipc-proto",
 ]
 
 [[package]]
+name = "pad-map"
+version = "0.17.3"
+dependencies = [
+ "duck-ipc-proto",
+ "pad-imu",
+ "robotd-params",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "padd"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "duck-ipc-proto",
@@ -3276,6 +3311,7 @@ dependencies = [
  "gilrs",
  "libc",
  "pad-imu",
+ "pad-map",
  "robotd-params",
  "serde",
  "serde_json",
@@ -3376,7 +3412,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pet-detect"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -3533,6 +3569,12 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quinn"
@@ -3844,7 +3886,7 @@ dependencies = [
 
 [[package]]
 name = "robotctl"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3852,6 +3894,7 @@ dependencies = [
  "kinematics",
  "libc",
  "pad-imu",
+ "qrcode",
  "ratatui",
  "robotd-params",
  "semver",
@@ -3865,7 +3908,7 @@ dependencies = [
 
 [[package]]
 name = "robotd"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "arc-swap",
  "clap",
@@ -3898,7 +3941,7 @@ dependencies = [
 
 [[package]]
 name = "robotd-params"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "duck-ipc-proto",
  "kinematics",
@@ -4350,7 +4393,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "show"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4360,7 +4403,7 @@ dependencies = [
 
 [[package]]
 name = "showd"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4450,7 +4493,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "singer"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -4481,7 +4524,7 @@ dependencies = [
 
 [[package]]
 name = "sounds"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4667,7 +4710,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -4684,7 +4727,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "minisign",
@@ -4773,7 +4816,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tof"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "ahrs",
  "anyhow",
@@ -5195,10 +5238,11 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "updater"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "clap",
  "duck-ipc-proto",
  "fs4",
@@ -5264,7 +5308,7 @@ dependencies = [
 
 [[package]]
 name = "uyvy"
-version = "0.16.1"
+version = "0.17.3"
 
 [[package]]
 name = "valuable"
@@ -5754,7 +5798,7 @@ checksum = "636f85e5ca6488e96401b61eb7de54f4e44755c988af0f52cf90230c312a1a89"
 
 [[package]]
 name = "xtask"
-version = "0.16.1"
+version = "0.17.3"
 dependencies = [
  "clap",
  "minisign",

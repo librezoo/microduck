@@ -103,7 +103,7 @@ fn apply_for(key: &str) -> Option<Apply> {
         // `updaterd` reads the board before every check, for the hardware revision a release is
         // checked against (`robotd_params::board::Board::declared`). Nothing else reads it yet.
         "board" => Apply::Live("updaterd"),
-        // `padd` stats the file once a second and re-reads both of its sections when the mtime
+        // `padd` stats the file once a second and re-reads its sections when the mtime
         // moves — `padd/src/main.rs`, where the reload is a line above `tap.imu_control()` and
         // says why it is on every tick. So there is nothing to offer, and offering a restart
         // anyway is not free: the pad session goes with it, and robotd's deadman zeroes the
@@ -111,7 +111,13 @@ fn apply_for(key: &str) -> Option<Apply> {
         // "padd picks this up within a second".
         //
         // `pad_imu_head_control` is the *controller's* IMU steering the head. Not `head_imu` below.
-        "pad" | "pad_imu_head_control" | "pad_drive" => Apply::Live("padd"),
+        "pad"
+        | "pad_imu_head_control"
+        | "pad_drive"
+        | "pad_axes"
+        | "pad_head"
+        | "pad_body"
+        | "pad_roller" => Apply::Live("padd"),
         // Whichever daemon reads this board's head IMU, once, at startup: `tofd` for the
         // `zero3`'s BMI088 (it shares the HAT's bus with the ToF; `tof/src/config.rs` says why
         // it reads robotd's file), `robotd` for the `beta`'s LSM6DSV16X. The board is the
@@ -133,8 +139,11 @@ fn apply_for(key: &str) -> Option<Apply> {
         // (`robotd/src/volume.rs`). Restarting for it would be the expensive way to be quieter — the
         // motors stop being driven, and a standing robot falls.
         "audio" if name == "volume" => Apply::Live("robotd"),
+        // Read once at startup by both `padd` and `netpadd`, each to decide whether it is the one
+        // to run (`--should-run`). `apply_for` names one daemon; `plan_for_keys` adds `padd`.
+        "netpad" => Apply::Restart("netpadd"),
         "bus" | "body_imu" | "control" | "update_gate" | "policy" | "safety" | "chorale"
-        | "theremin" | "pickup" | "audio" => Apply::Restart("robotd"),
+        | "idle" | "theremin" | "pickup" | "audio" => Apply::Restart("robotd"),
         _ => return None,
     })
 }
@@ -181,6 +190,10 @@ fn plan_for_keys<'a>(keys: impl Iterator<Item = &'a str>) -> Plan {
         };
         if !list.contains(&apply.unit()) {
             list.push(apply.unit());
+        }
+        // The other half of `[netpad]`: restarting only `netpadd` leaves `padd` on the old answer.
+        if key.starts_with("netpad.") && !plan.restart.contains(&"padd") {
+            plan.restart.push("padd");
         }
     }
     // A daemon that is going down anyway reads the whole file coming back up, so the weaker
@@ -1159,10 +1172,10 @@ mod tests {
         assert!(plan.restart.is_empty(), "and it needs no restart");
     }
 
-    /// `[pad]`, `[pad_imu_head_control]` and `[pad_drive]` are live: padd re-reads them, so there is nothing to offer.
+    /// Controller sections are live: padd re-reads them, so there is nothing to offer.
     ///
     /// The inverse of the `[head_imu]` bug and the same mistake — a mapping that does not
-    /// describe the daemon. `padd` stats the file every second and re-reads both sections when
+    /// describe the daemon. `padd` stats the file every second and re-reads its settings when
     /// the mtime moves, which is why `robotctl pad bind` prints "padd picks this up within a
     /// second" rather than offering anything. Restarting it to apply what applies by itself
     /// takes the pad session down, and robotd's deadman then zeroes the velocity of whatever was
@@ -1176,12 +1189,21 @@ mod tests {
             "pad_imu_head_control.gain",
             "pad_drive.vx_max",
             "pad_drive.vyaw_min",
+            "pad_axes.drive.vyaw.gain",
+            "pad_head.head_yaw_max",
+            "pad_body.roll_max",
+            "pad_roller.vyaw_max",
         ] {
             let mut m = model("");
             let value = match key {
                 "pad_imu_head_control.enabled" => "true",
-                "pad_imu_head_control.gain" | "pad_drive.vx_max" => "0.5",
-                "pad_drive.vyaw_min" => "-1.0",
+                "pad_imu_head_control.gain"
+                | "pad_drive.vx_max"
+                | "pad_axes.drive.vyaw.gain"
+                | "pad_head.head_yaw_max"
+                | "pad_body.roll_max"
+                | "pad_roller.vyaw_max" => "0.5",
+                "pad_drive.vyaw_min" => "-1.2",
                 _ => "walk",
             };
             m.edit(entry(key), value).expect("valid");
@@ -1286,6 +1308,13 @@ mod tests {
             unmapped.is_empty(),
             "nothing says how {unmapped:?} applies — add an arm to `apply_for`"
         );
+    }
+
+    /// Either half of the pad source restarted alone leaves the other on the old answer.
+    #[test]
+    fn a_netpad_change_restarts_both_pad_daemons() {
+        let plan = plan_for_written(&["netpad.enabled".to_string(), "netpad.port".to_string()]);
+        assert_eq!(plan.restart, vec!["netpadd", "padd"]);
     }
 
     /// The offer says which daemon and which of the three answers, in words.

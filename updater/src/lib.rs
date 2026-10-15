@@ -55,6 +55,7 @@ pub mod transcript;
 /// Names to numbers, for the two lookups this crate makes against the user database.
 pub mod unix;
 pub mod verify;
+pub mod vetbook;
 
 use std::path::PathBuf;
 

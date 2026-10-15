@@ -1,0 +1,123 @@
+# `duckctl`, the laptop-side tool, built once per platform and handed out two ways from the same
+# binary: a wheel (`duckctl-wheel-<platform>`), which is what `uvx duckctl` installs from PyPI, and
+# a tarball or zip (`duckctl-<platform>`), which `scripts/install-duckctl.sh` fetches from a branch's
+# prerelease. Called by `dev.yml` on every push and by `duckctl-pypi.yml` on a release tag.
+#
+# Built by maturin (`duckctl/pyproject.toml`), and the archive is the binary taken back out of the
+# wheel, so there is no second build that could differ from the first. On Linux maturin builds in
+# the manylinux_2_28 container, so either form runs on glibc 2.28 or newer (Debian 10, Ubuntu 20.04)
+# rather than on whatever the runner image has; libdbus is compiled in (`duckctl/Cargo.toml`), which
+# is what makes that a real manylinux wheel rather than one with a library grafted in. libudev,
+# which gilrs reads pads through for `udp-pad`, cannot be compiled in: the container gets its
+# headers, and maturin's default auditwheel repair grafts `libudev.so.1` into the wheel. The tarball
+# is the bare binary, so on Linux it takes the machine's own libudev, which every systemd
+# distribution has.
+#
+# A tarball per Unix platform so the executable bit survives; a zip for Windows, which PowerShell's
+# `Expand-Archive` reads. The macOS binaries are unsigned: fetched with curl or uv they run, fetched
+# by a browser they are quarantined.
+name: build duckctl
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runs-on: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: '2_28'
+          # Native rather than cross, so the vendored libdbus is compiled by the container's own gcc.
+          - name: linux-aarch64
+            runs-on: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            manylinux: '2_28'
+          - name: macos-arm64
+            runs-on: macos-latest
+            target: aarch64-apple-darwin
+          # Cross-compiled from the arm64 runner: the Xcode SDK carries both architectures.
+          - name: macos-x86_64
+            runs-on: macos-latest
+            target: x86_64-apple-darwin
+          - name: windows-x86_64
+            runs-on: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runs-on }}
+    defaults:
+      run:
+        # Git Bash on Windows, so every step below is the same line everywhere.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # PyPI refuses the whole upload over one classifier it does not know — and only at upload, on a
+      # release tag, whose metadata is then fixed. `daemon-v0.16.2` was lost that way. Checked here,
+      # on every push, so it fails a branch instead. One platform is enough: the metadata is the same.
+      - name: Classifiers are ones PyPI knows
+        if: matrix.name == 'linux-x86_64'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/trove"
+          "$RUNNER_TEMP/trove/bin/pip" install -q trove-classifiers
+          "$RUNNER_TEMP/trove/bin/python" - <<'EOF'
+          import sys, tomllib
+          from trove_classifiers import classifiers
+          bad = [c for c in tomllib.load(open("duckctl/pyproject.toml", "rb"))["project"]["classifiers"] if c not in classifiers]
+          for c in bad:
+              print(f"::error file=duckctl/pyproject.toml::{c!r} is not a PyPI classifier")
+          sys.exit(1 if bad else 0)
+          EOF
+
+      # `--locked`: the wheel is built from the lockfile CI tested, never a fresh resolve.
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: duckctl
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --locked --out ${{ github.workspace }}/wheels
+          before-script-linux: dnf install -y systemd-devel
+
+      - name: Package the binary out of the wheel
+        run: |
+          set -eu
+          wheel="$(ls wheels/*.whl)"
+          mkdir -p bin dist
+          # The one file under `<name>.data/scripts/` is the binary. `python`, not `python3`, on
+          # the Windows image, where only the first is the real interpreter.
+          py=python3; [ "$RUNNER_OS" = Windows ] && py=python
+          "$py" - "$wheel" bin <<'EOF'
+          import os, sys, zipfile
+          wheel, out = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(wheel) as z:
+              [name] = [n for n in z.namelist() if ".data/scripts/" in n]
+              path = os.path.join(out, os.path.basename(name))
+              with open(path, "wb") as f:
+                  f.write(z.read(name))
+              os.chmod(path, 0o755)
+          EOF
+          cd bin
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a "$GITHUB_WORKSPACE/dist/duckctl-${{ matrix.name }}.zip" duckctl.exe
+          else
+            tar -czf "$GITHUB_WORKSPACE/dist/duckctl-${{ matrix.name }}.tar.gz" duckctl
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duckctl-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duckctl-wheel-${{ matrix.name }}
+          path: wheels/*.whl
+          if-no-files-found: error
+          retention-days: 1

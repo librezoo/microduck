@@ -20,6 +20,9 @@ pub mod board;
 pub mod edit;
 pub mod registry;
 
+pub mod pad_axes;
+pub use pad_axes::{PadAxesParams, PadBodyParams, PadHeadParams, PadRollerParams};
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -77,6 +80,7 @@ pub struct Params {
     pub pickup: PickupParams,
     pub head_imu: HeadImuParams,
     pub chorale: ChoraleParams,
+    pub idle: IdleParams,
     pub media: MediaParams,
     ///
     /// `[detect]` until 2026-09: in `robotctl configure` that read as "detect what?", one line
@@ -96,6 +100,17 @@ pub struct Params {
     pub pad_imu_head_control: PadImuHeadControlParams,
     /// How fast full stick deflection drives the robot. `padd` reads this as well.
     pub pad_drive: PadDriveParams,
+    /// Which stick drives which command, per D-pad mode. `padd` and `netpadd` read this, and
+    /// the three sections after it, through `pad-map`.
+    pub pad_axes: PadAxesParams,
+    /// Full-deflection head travel per joint.
+    pub pad_head: PadHeadParams,
+    /// Body + head mode's height and tilt ranges.
+    pub pad_body: PadBodyParams,
+    /// `[pad_drive]` on wheels.
+    pub pad_roller: PadRollerParams,
+    /// The pad over UDP: `netpadd` reads this, and so does `padd`, to know whether to stand down.
+    pub netpad: NetpadParams,
 }
 
 /// The pad's walking speed limits: what full stick deflection asks for, per axis and per
@@ -104,7 +119,7 @@ pub struct Params {
 /// Each axis has a bound per direction, signed in the robot's own frame — `vx` forward, `vy` to
 /// the left, `vyaw` counter-clockwise seen from above — so a `_min` is the bound in the negative
 /// direction and is itself negative (or zero, to forbid that direction). The stick is linear
-/// between centre and either bound. Walk mode only: roller mode keeps its own shaping.
+/// between centre and either bound. Walk mode only: on wheels it is `[pad_roller]`.
 ///
 /// This is what the *pad* asks for, not a limit on the robot. A `robot.move` from anywhere else
 /// is not bounded by it, and the policy only follows commands inside the range it was trained
@@ -127,16 +142,17 @@ pub struct PadDriveParams {
 }
 
 impl Default for PadDriveParams {
-    /// The prototype's alpha defaults, which were `padd`'s command-line defaults until they
-    /// moved here.
+    /// Started as the prototype's alpha defaults (`padd`'s old command-line defaults). Since the
+    /// v8 velstand, which tracks yaw commands, forward/back is 0.4 m/s and turning 1.0 rad/s —
+    /// what that policy follows well on the robot.
     fn default() -> Self {
         Self {
-            vx_max: 0.3,
-            vx_min: -0.3,
+            vx_max: 0.4,
+            vx_min: -0.4,
             vy_max: 0.3,
             vy_min: -0.3,
-            vyaw_max: 1.5,
-            vyaw_min: -1.5,
+            vyaw_max: 1.0,
+            vyaw_min: -1.0,
         }
     }
 }
@@ -158,6 +174,43 @@ impl PadDriveParams {
             deflection * max
         } else {
             -deflection * min
+        }
+    }
+}
+
+/// A gamepad over UDP, from a program on the LAN — `netpadd`. `docs/robot/udp-pad.md` owns it.
+///
+/// `enabled` is the switch between the two pad daemons, not a feature flag on one: both units ask
+/// it in `ExecCondition=`, so exactly one of `padd` and `netpadd` runs, and an update's restart of
+/// every shipped unit reaches the same answer as a boot does.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NetpadParams {
+    /// UDP is the pad source; `padd` stands down.
+    pub enabled: bool,
+    /// The UDP port, bound on IPv4 0.0.0.0.
+    pub port: u16,
+    /// At most this many intent frames a second reach robotd. A change is sent at once when the
+    /// last send is at least one interval old, otherwise at the next slot — never queued.
+    pub max_hz: u32,
+    /// Nothing new for this long and the robot is stopped where it stands, the client kept: a blip
+    /// on Wi-Fi costs a stop, not the session. Also how late a datagram may be delivered and still
+    /// drive. Below `[safety] deadman_ms`, or a stalled client's last stick would keep the deadman
+    /// fed.
+    pub stale_ms: u64,
+    /// Silence after which the client counts as gone: the lock released, holds reset, and a second
+    /// later the robot sits.
+    pub timeout_ms: u64,
+}
+
+impl Default for NetpadParams {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 4210,
+            max_hz: 30,
+            stale_ms: 300,
+            timeout_ms: 1000,
         }
     }
 }
@@ -202,8 +255,8 @@ impl Default for PadImuHeadControlParams {
 /// needs. It would also put "the button that stops the robot" behind a config key, which is the
 /// one binding worth not being able to lose.
 ///
-/// The defaults keep the pad sparse on purpose: A sits or stands, B picks up, the bumpers kick,
-/// and X and Y do nothing until somebody puts a skill there. A named button is rebound; the rest
+/// The defaults keep the pad sparse on purpose: A sits or stands, B picks up, and X, Y and the
+/// bumpers do nothing until somebody puts a skill there (the kicks are still in the set, unbound). A named button is rebound; the rest
 /// stay as they were.
 ///
 /// A name here is not checked against anything at parse time: which skills exist is a property of
@@ -235,8 +288,8 @@ impl Default for PadParams {
             b: "ground_pick".to_owned(),
             x: String::new(),
             y: String::new(),
-            lb: "kick_left".to_owned(),
-            rb: "kick_right".to_owned(),
+            lb: String::new(),
+            rb: String::new(),
         }
     }
 }
@@ -800,6 +853,197 @@ pub struct ChoraleParams {
     /// Whether this robot may sing with others at all. `false` — and it is derived rather than
     /// written out, so that the default cannot be changed by editing one word.
     pub accept: bool,
+}
+
+/// `[idle]` — the robot looking around while nothing is happening (`robotd/src/idle_head.rs`).
+///
+/// After `after_s` with no motion asked for and nobody steering the head, it glances somewhere,
+/// holds the look while shifting its gaze a little around it, and picks somewhere new; a slow
+/// drift and a breath ride on top, and the longer it is left alone the calmer it gets. Every
+/// number here is a tuning knob for how alive that reads, nothing more: none of them can move
+/// the head further than `glance_yaw` + `nudge_yaw` + `drift` from where it was asked to be, or
+/// pitch it further than `yawn_pitch` beyond that.
+///
+/// Angles are radians, durations seconds. Read once at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct IdleParams {
+    /// Master switch.
+    pub enabled: bool,
+    /// Still for this long before it starts.
+    pub after_s: f64,
+    /// How long it takes to fade in, and out.
+    pub fade_s: f64,
+    /// How far a glance turns the head left or right at most.
+    pub glance_yaw: f64,
+    /// How far a glance tips it up or down at most.
+    pub glance_pitch: f64,
+    /// How far a glance leans the neck forward or back at most — posture under the look, so
+    /// the whole head shifts rather than only the face turning.
+    pub glance_neck: f64,
+    /// How far a look opens the beak at most, 0..1 — eased with the glance, so the mouth moves
+    /// a little as the robot looks about; each look opens it between half and all of this.
+    /// Below about 0.15 it does not visibly open: closed is held a few degrees past shut.
+    /// Zero keeps it shut but for the yawns.
+    pub glance_mouth: f64,
+    /// The curious sideways tilt a glance sometimes comes with.
+    pub tilt_roll: f64,
+    /// How often a glance comes with the tilt, 0..1.
+    pub tilt_chance: f64,
+    /// How often a glance goes back to the middle rather than somewhere new, 0..1.
+    pub centre_chance: f64,
+    /// How far a new look is from the last one at least, yaw and pitch together — so a glance
+    /// never lands where the head already is and reads as dithering.
+    pub glance_min: f64,
+    /// How long one look lasts before it picks somewhere new, at full energy; dozing stretches
+    /// it.
+    pub hold_min_s: f64,
+    pub hold_max_s: f64,
+    /// How long a move takes: this much, plus `move_s_per_rad` for every radian it travels.
+    pub move_min_s: f64,
+    pub move_s_per_rad: f64,
+    /// While holding a look, the gaze shifts this far around it, yaw and pitch — the small
+    /// re-fixations that keep a held look from reading as frozen. Zero turns them off.
+    pub nudge_yaw: f64,
+    pub nudge_pitch: f64,
+    /// How long between those shifts.
+    pub nudge_every_min_s: f64,
+    pub nudge_every_max_s: f64,
+    /// The slow drift on every head axis, radians, and its frequency in Hz.
+    pub drift: f64,
+    pub drift_hz: f64,
+    /// The breath: metres of body height, and seconds per breath. Standing network only.
+    pub breath_m: f64,
+    pub breath_period_s: f64,
+    /// Dozing: seconds until it is mostly calmed down, and how calm it gets, 0..1 — 1 never
+    /// dozes.
+    pub doze_tau_s: f64,
+    pub doze_floor: f64,
+    /// Yawning, once it has been idle `yawn_after_s`: about every `yawn_every_s` (0 never), for
+    /// `yawn_s`, the mouth opens to `yawn_open` (0..1) and the head tips by `yawn_pitch`.
+    /// `yawn_pitch` is signed; negative is up, as far as `robot.look` says.
+    pub yawn_after_s: f64,
+    pub yawn_every_s: f64,
+    pub yawn_s: f64,
+    pub yawn_open: f64,
+    pub yawn_pitch: f64,
+}
+
+impl Default for IdleParams {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            after_s: 2.0,
+            fade_s: 1.5,
+            glance_yaw: 0.6,
+            glance_pitch: 0.2,
+            glance_neck: 0.15,
+            glance_mouth: 0.4,
+            tilt_roll: 0.3,
+            tilt_chance: 0.25,
+            centre_chance: 0.25,
+            glance_min: 0.2,
+            hold_min_s: 1.0,
+            hold_max_s: 3.0,
+            move_min_s: 0.3,
+            move_s_per_rad: 1.0,
+            nudge_yaw: 0.08,
+            nudge_pitch: 0.05,
+            nudge_every_min_s: 0.4,
+            nudge_every_max_s: 1.2,
+            drift: 0.04,
+            drift_hz: 0.15,
+            breath_m: 0.001,
+            breath_period_s: 3.6,
+            doze_tau_s: 90.0,
+            doze_floor: 0.5,
+            yawn_after_s: 45.0,
+            yawn_every_s: 90.0,
+            yawn_s: 3.0,
+            yawn_open: 0.6,
+            yawn_pitch: -0.15,
+        }
+    }
+}
+
+impl IdleParams {
+    /// What is wrong with these values, if anything, as (key, reason).
+    fn invalid(&self) -> Option<(&'static str, &'static str)> {
+        let finite = [
+            ("after_s", self.after_s),
+            ("fade_s", self.fade_s),
+            ("glance_yaw", self.glance_yaw),
+            ("glance_pitch", self.glance_pitch),
+            ("glance_neck", self.glance_neck),
+            ("glance_mouth", self.glance_mouth),
+            ("tilt_roll", self.tilt_roll),
+            ("tilt_chance", self.tilt_chance),
+            ("centre_chance", self.centre_chance),
+            ("glance_min", self.glance_min),
+            ("hold_min_s", self.hold_min_s),
+            ("hold_max_s", self.hold_max_s),
+            ("move_min_s", self.move_min_s),
+            ("move_s_per_rad", self.move_s_per_rad),
+            ("nudge_yaw", self.nudge_yaw),
+            ("nudge_pitch", self.nudge_pitch),
+            ("nudge_every_min_s", self.nudge_every_min_s),
+            ("nudge_every_max_s", self.nudge_every_max_s),
+            ("drift", self.drift),
+            ("drift_hz", self.drift_hz),
+            ("breath_m", self.breath_m),
+            ("breath_period_s", self.breath_period_s),
+            ("doze_tau_s", self.doze_tau_s),
+            ("doze_floor", self.doze_floor),
+            ("yawn_after_s", self.yawn_after_s),
+            ("yawn_every_s", self.yawn_every_s),
+            ("yawn_s", self.yawn_s),
+            ("yawn_open", self.yawn_open),
+        ];
+        if let Some((key, _)) = finite.iter().find(|(_, v)| !(v.is_finite() && *v >= 0.0)) {
+            return Some((key, "must be finite and nonnegative"));
+        }
+        if !self.yawn_pitch.is_finite() {
+            return Some(("yawn_pitch", "must be finite"));
+        }
+        // Each of these is divided by, or is what keeps a tick's motion from being a jump.
+        for (key, value) in [
+            ("fade_s", self.fade_s),
+            ("move_min_s", self.move_min_s),
+            ("breath_period_s", self.breath_period_s),
+            ("doze_tau_s", self.doze_tau_s),
+            ("doze_floor", self.doze_floor),
+            ("yawn_s", self.yawn_s),
+        ] {
+            if value == 0.0 {
+                return Some((key, "must be above zero"));
+            }
+        }
+        if self.tilt_chance > 1.0 {
+            return Some(("tilt_chance", "is a probability, 0 to 1"));
+        }
+        if self.centre_chance > 1.0 {
+            return Some(("centre_chance", "is a probability, 0 to 1"));
+        }
+        if self.doze_floor > 1.0 {
+            return Some(("doze_floor", "must be at most 1 — 1 never dozes"));
+        }
+        if self.glance_mouth > 1.0 {
+            return Some(("glance_mouth", "is a mouth opening, 0 to 1"));
+        }
+        if self.yawn_open > 1.0 {
+            return Some(("yawn_open", "is a mouth opening, 0 to 1"));
+        }
+        if self.hold_min_s > self.hold_max_s {
+            return Some(("hold_min_s", "must not be above idle.hold_max_s"));
+        }
+        if self.nudge_every_min_s > self.nudge_every_max_s {
+            return Some((
+                "nudge_every_min_s",
+                "must not be above idle.nudge_every_max_s",
+            ));
+        }
+        None
+    }
 }
 
 /// `[theremin]` — the ToF theremin: what counts as a hand, and where the depth frames come
@@ -2250,6 +2494,12 @@ pub enum ParamsError {
     },
     #[error("{path}: control.hz must be between 1 and 1000, got {got}")]
     Rate { path: String, got: u32 },
+    #[error("{path}: invalid controller setting {key}: {reason}")]
+    PadSetting {
+        path: String,
+        key: String,
+        reason: &'static str,
+    },
     #[error(
         "{path}: media.bitrate must be between {min} and {max} bits per second, got {got} — \
          the unit is bits, so 2 Mb/s is 2000000"
@@ -2264,6 +2514,8 @@ pub enum ParamsError {
     BodyImuMount { path: String, got: f64 },
     #[error("{path}: audio.volume is a percentage from 0 to {max}, got {got}")]
     AudioVolume { path: String, got: u8, max: u8 },
+    #[error("{path}: {reason}")]
+    Netpad { path: String, reason: String },
     #[error(
         "{path}: pad_drive.{axis}_min must be zero or negative and pad_drive.{axis}_max zero or \
          positive, got {min} and {max} — the bounds are signed, so full stick back at 0.2 m/s is \
@@ -2274,6 +2526,12 @@ pub enum ParamsError {
         axis: &'static str,
         min: f64,
         max: f64,
+    },
+    #[error("{path}: idle.{key} {reason}")]
+    Idle {
+        path: String,
+        key: &'static str,
+        reason: &'static str,
     },
     #[error(
         "{path}: pickup.resume_threshold ({resume}) must be below pickup.pause_threshold \
@@ -2409,6 +2667,95 @@ impl Params {
                 });
             }
         }
+        if let Some((key, reason)) = self.idle.invalid() {
+            return Err(ParamsError::Idle {
+                path: path.display().to_string(),
+                key,
+                reason,
+            });
+        }
+        // Refused rather than clamped, like `control.hz`: the editor should say which value it
+        // was not going to guess at. The floor is 10 because netpadd's 100 ms fallback tick must
+        // not be faster than the cap, and below a few Hz a held stick would outrun robotd's deadman.
+        if !(10..=100).contains(&self.netpad.max_hz) {
+            return Err(ParamsError::Netpad {
+                path: path.display().to_string(),
+                reason: format!("netpad.max_hz ({}) must be 10–100", self.netpad.max_hz),
+            });
+        }
+        // Gated on `enabled` because robotd loads this file too: a board not using netpad must
+        // never fail to load over a section it does not read.
+        if self.netpad.enabled {
+            let n = &self.netpad;
+            let reason = if n.stale_ms == 0 || n.stale_ms >= self.safety.deadman_ms {
+                Some(format!(
+                    "netpad.stale_ms ({}) must be above 0 and below safety.deadman_ms ({}) — \
+                     past the deadman it would keep a stalled client's last stick going",
+                    n.stale_ms, self.safety.deadman_ms
+                ))
+            } else if n.timeout_ms < n.stale_ms {
+                Some(format!(
+                    "netpad.timeout_ms ({}) must be at least netpad.stale_ms ({}) — the client is \
+                     stopped before it counts as gone",
+                    n.timeout_ms, n.stale_ms
+                ))
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Err(ParamsError::Netpad {
+                    path: path.display().to_string(),
+                    reason,
+                });
+            }
+        }
+        let invalid = |key: &str, reason| ParamsError::PadSetting {
+            path: path.display().to_string(),
+            key: key.to_owned(),
+            reason,
+        };
+        if !(self.pad_axes.deadzone.is_finite() && (0.0..1.0).contains(&self.pad_axes.deadzone)) {
+            return Err(invalid("pad_axes.deadzone", "must be finite and in [0, 1)"));
+        }
+        for (key, binding) in self.pad_axes.bindings() {
+            if !(binding.gain.is_finite() && binding.gain >= 0.0) {
+                return Err(invalid(
+                    &format!("{key}.gain"),
+                    "must be finite and nonnegative",
+                ));
+            }
+        }
+        for (key, value) in [
+            ("pad_head.neck_pitch_max", self.pad_head.neck_pitch_max),
+            ("pad_head.head_pitch_max", self.pad_head.head_pitch_max),
+            ("pad_head.head_yaw_max", self.pad_head.head_yaw_max),
+            ("pad_head.head_roll_max", self.pad_head.head_roll_max),
+            ("pad_body.pitch_max", self.pad_body.pitch_max),
+            ("pad_body.roll_max", self.pad_body.roll_max),
+        ] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(invalid(key, "must be finite and nonnegative"));
+            }
+        }
+        for (key, min, max) in std::iter::once((
+            "pad_body.z".to_owned(),
+            self.pad_body.z_min,
+            self.pad_body.z_max,
+        ))
+        .chain(
+            self.pad_roller
+                .limits()
+                .axes()
+                .into_iter()
+                .map(|(axis, min, max)| (format!("pad_roller.{axis}"), min, max)),
+        ) {
+            if !(min.is_finite() && max.is_finite() && min <= 0.0 && max >= 0.0) {
+                return Err(invalid(
+                    &key,
+                    "min must be finite and nonpositive; max finite and nonnegative",
+                ));
+            }
+        }
         // An inverted band would pause and resume on the same probability, every tick.
         let (pause, resume) = (self.pickup.pause_threshold, self.pickup.resume_threshold);
         if !(0.0 < resume && resume < pause && pause < 1.0) {
@@ -2424,6 +2771,28 @@ impl Params {
     pub fn period(&self) -> std::time::Duration {
         std::time::Duration::from_secs_f64(1.0 / self.control.hz as f64)
     }
+}
+
+/// Drops every key under `prefix` the registry does not know, recursing into tables that hold
+/// registry keys — `[pad_axes.drive.vyaw]` is three levels down — and naming each one dropped.
+fn prune_fields(prefix: &str, fields: &mut toml::Table, ignored: &mut Vec<String>) {
+    fields.retain(|key, value| {
+        let path = format!("{prefix}.{key}");
+        if registry::entry_for(&path).is_some() {
+            return true;
+        }
+        if registry::REGISTRY
+            .iter()
+            .any(|entry| entry.key.starts_with(&format!("{path}.")))
+        {
+            if let Some(children) = value.as_table_mut() {
+                prune_fields(&path, children, ignored);
+            }
+            return true;
+        }
+        ignored.push(path);
+        false
+    });
 }
 
 /// Re-parse a file that `deny_unknown_fields` rejected, dropping the keys this build has no
@@ -2472,14 +2841,7 @@ fn without_unknown_keys(text: &str) -> Option<(Result<Params, toml::de::Error>, 
             ignored.push(format!("[{section}]"));
             return false;
         }
-        fields.retain(|key, _| {
-            if registry::entry_for(&format!("{section}.{key}")).is_some() {
-                true
-            } else {
-                ignored.push(format!("{section}.{key}"));
-                false
-            }
-        });
+        prune_fields(section, fields, &mut ignored);
         true
     });
 
@@ -2626,6 +2988,45 @@ mod tests {
                 crate::registry::Kind::OptionalPath,
                 "{key} must be a path slot"
             );
+        }
+    }
+
+    /// A partial binding keeps the rest of its mode's default, an unknown nested key is dropped
+    /// rather than taking the bindings with it, and every out-of-range value is refused.
+    #[test]
+    fn controller_partial_overrides_and_invalid_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("robotd.toml");
+        std::fs::write(&path, "[pad_axes.drive.vyaw]\ngain = 0.5\n").unwrap();
+        let params = Params::load(&path, true).unwrap();
+        assert_eq!(params.pad_axes.drive.vyaw.gain, 0.5);
+        assert!(params.pad_axes.drive.vyaw.invert);
+        assert_eq!(
+            params.pad_axes.drive.vyaw.source,
+            pad_axes::AxisSource::RightX
+        );
+        // An unrelated future setting must not erase the recognized nested bindings.
+        std::fs::write(
+            &path,
+            "[pad_axes.drive.vyaw]\ngain = 0.5\nfuture_setting = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Params::load(&path, true).unwrap().pad_axes.drive.vyaw.gain,
+            0.5
+        );
+        for text in [
+            "[pad_axes]\ndeadzone = 1.0",
+            "[pad_axes]\ndeadzone = nan",
+            "[pad_axes.drive.vx]\ngain = -1.0",
+            "[pad_axes.drive.vx]\ngain = inf",
+            "[pad_axes.drive.vx]\nsource = 'typo'",
+            "[pad_head]\nhead_yaw_max = -1.0",
+            "[pad_body]\nz_min = 0.01",
+            "[pad_roller]\nvx_max = -0.2",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(Params::load(&path, true).is_err(), "accepted {text}");
         }
     }
 
@@ -2909,7 +3310,7 @@ mod tests {
         );
     }
 
-    /// The shipped mapping: A sits, B picks up, the bumpers kick, X and Y are free.
+    /// The shipped mapping: A sits, B picks up, X, Y and the bumpers are free.
     #[test]
     fn the_default_bindings() {
         let pad = super::PadParams::default();
@@ -2917,8 +3318,8 @@ mod tests {
         assert_eq!(pad.b, "ground_pick");
         assert_eq!(pad.x, "");
         assert_eq!(pad.y, "");
-        assert_eq!(pad.lb, "kick_left");
-        assert_eq!(pad.rb, "kick_right");
+        assert_eq!(pad.lb, "");
+        assert_eq!(pad.rb, "");
     }
 
     /// **The D-pad stopped being bindable, and a robot still carrying the old key boots.** It is
@@ -2931,13 +3332,13 @@ mod tests {
     }
 
     /// Binding one button leaves the rest alone — the file is a list of decisions, and rebinding
-    /// X must not silently take the kicks off the bumpers.
+    /// X must not silently take the ground pick off B.
     #[test]
     fn binding_one_button_leaves_the_others() {
         let params: super::Params =
             toml::from_str("[pad]\nx = \"polite-bow\"\n").expect("a pad section");
         assert_eq!(params.pad.x, "polite-bow");
-        assert_eq!(params.pad.lb, "kick_left", "untouched");
+        assert_eq!(params.pad.b, "ground_pick", "untouched");
         assert_eq!(params.pad.a, "sit_toggle", "untouched");
     }
 
@@ -3643,6 +4044,73 @@ mod tests {
         assert_eq!(params.pad_drive.vy_min, -0.1);
     }
 
+    /// The cap is a divisor and a promise about latency: zero divides by it, and a rate above
+    /// what a pad link carries only spends the robot's socket.
+    #[test]
+    fn netpad_max_hz_outside_ten_to_a_hundred_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for bad in ["0", "9", "101"] {
+            let path = write(dir.path(), &format!("[netpad]\nmax_hz = {bad}\n"));
+            let error = Params::load(&path, true).expect_err("refused").to_string();
+            assert!(error.contains("netpad.max_hz"), "{error}");
+        }
+        for good in [10, 100] {
+            let path = write(dir.path(), &format!("[netpad]\nmax_hz = {good}\n"));
+            assert_eq!(
+                Params::load(&path, true).expect("valid").netpad.max_hz,
+                good
+            );
+        }
+    }
+
+    /// A stale limit at or past the deadman would keep re-sending a stalled client's last stick
+    /// until robotd stops the robot anyway — it would protect nothing. The client counts as gone
+    /// no sooner than it is stopped. Only checked when netpad is on: robotd loads this file too,
+    /// and a board that does not use netpad must never fail to load over it.
+    #[test]
+    fn netpad_stale_must_be_below_the_deadman_and_the_timeout_not_below_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "[netpad]\nenabled = true\nstale_ms = 500\n");
+        let error = Params::load(&path, true).expect_err("refused").to_string();
+        assert!(error.contains("netpad.stale_ms"), "{error}");
+        assert!(error.contains("safety.deadman_ms"), "{error}");
+
+        let path = write(dir.path(), "[netpad]\nenabled = true\nstale_ms = 0\n");
+        assert!(Params::load(&path, true).is_err(), "zero is always stale");
+
+        let path = write(
+            dir.path(),
+            "[netpad]\nenabled = true\nstale_ms = 300\ntimeout_ms = 200\n",
+        );
+        let error = Params::load(&path, true).expect_err("refused").to_string();
+        assert!(error.contains("netpad.timeout_ms"), "{error}");
+
+        let path = write(
+            dir.path(),
+            "[netpad]\nenabled = true\nstale_ms = 500\ntimeout_ms = 5000\n[safety]\ndeadman_ms = 800\n",
+        );
+        let n = Params::load(&path, true).expect("valid").netpad;
+        assert_eq!((n.stale_ms, n.timeout_ms), (500, 5000));
+
+        let path = write(dir.path(), "[netpad]\nenabled = false\nstale_ms = 500\n");
+        assert_eq!(
+            Params::load(&path, true)
+                .expect("off is not checked")
+                .netpad
+                .stale_ms,
+            500
+        );
+    }
+
+    #[test]
+    fn netpad_defaults_are_off_on_4210_at_30_hz() {
+        let n = NetpadParams::default();
+        assert_eq!(
+            (n.enabled, n.port, n.max_hz, n.stale_ms, n.timeout_ms),
+            (false, 4210, 30, 300, 1000)
+        );
+    }
+
     /// On by default, from the release's own copy of the model — a robot nobody configured stops
     /// thrashing in the hand. `"none"` is the way to keep the switch on and load nothing.
     #[test]
@@ -3662,6 +4130,26 @@ mod tests {
 
     /// The two thresholds are a hysteresis band. Inverted, the latch would pause and resume on
     /// the same probability — refused, so `robotctl configure` cannot write it.
+    /// `[idle]` values the look-around would divide by, or that put a range backwards, are
+    /// refused by name; an ordinary retune loads.
+    #[test]
+    fn a_broken_idle_tuning_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        for (text, key) in [
+            ("[idle]\nfade_s = 0.0\n", "idle.fade_s"),
+            ("[idle]\nhold_min_s = 4.0\n", "idle.hold_min_s"),
+            ("[idle]\ntilt_chance = 2.0\n", "idle.tilt_chance"),
+            ("[idle]\nnudge_yaw = -0.1\n", "idle.nudge_yaw"),
+        ] {
+            let path = write(dir.path(), text);
+            let error = Params::load(&path, true).unwrap_err().to_string();
+            assert!(error.contains(key), "{error}");
+        }
+        let path = write(dir.path(), "[idle]\nhold_max_s = 1.5\nnudge_yaw = 0.0\n");
+        let idle = Params::load(&path, true).unwrap().idle;
+        assert_eq!((idle.hold_max_s, idle.nudge_yaw), (1.5, 0.0));
+    }
+
     #[test]
     fn an_inverted_pickup_band_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -3743,6 +4231,7 @@ mod tests {
         assert_eq!(from_file.policy.resolved(), built_in.policy.resolved());
         assert_eq!(from_file.safety.limp_fall, built_in.safety.limp_fall);
         assert_eq!(from_file.pickup, built_in.pickup);
+        assert_eq!(from_file.idle, built_in.idle);
         assert_eq!(
             from_file.safety.battery_empty_shutdown,
             built_in.safety.battery_empty_shutdown

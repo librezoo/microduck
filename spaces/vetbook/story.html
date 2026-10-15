@@ -1,0 +1,35 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* story: 1080 × 1920, for Instagram and TikTok — one bold gradient, the duck big, one number per
+   band, badges and the mood at the end */
+.story { --a: #ff5c9a; --b: #9b7bff; --c: #5ab3f0; color: #fff; background: linear-gradient(170deg, var(--a), var(--b) 55%, var(--c)); font-family: "Zen Maru Gothic"; }
+.story.pal1 { --a: #ff9a5c; --b: #ff5c9a; --c: #9b7bff; }
+.story.pal2 { --a: #3fcf9f; --b: #5ab3f0; --c: #9b7bff; }
+.story.pal3 { --a: #ffbf3d; --b: #ff7eb0; --c: #ff5c9a; }
+.story::before { content: ""; position: absolute; inset: 0; background: radial-gradient(#ffffff2e 3px, transparent 3.5px) 0 0 / 40px 40px; }
+.story .top { position: absolute; left: 70px; right: 70px; top: 90px; }
+.story .top small { font: 700 32px "Zen Maru Gothic"; opacity: .9; }
+.story .top h1 { margin: 6px 0 0; font: 400 96px/1 "Mochiy Pop One"; white-space: nowrap; text-shadow: 0 6px 0 #0002; }
+.story .sticker { left: 160px; top: 330px; width: 760px; transform: rotate(-4deg); filter: drop-shadow(0 20px 30px #0004); }
+.story .bands { position: absolute; left: 70px; right: 70px; top: 930px; display: grid; gap: 22px; }
+.story .band { background: #ffffff26; border: 3px solid #ffffff55; border-radius: 34px; padding: 18px 30px; display: flex; align-items: baseline; gap: 18px; }
+.story .band b { font: 400 76px/1 "Mochiy Pop One"; white-space: nowrap; flex: none; }
+.story .band span { font: 700 30px/1.2 "Zen Maru Gothic"; opacity: .95; min-width: 0; }
+.story .mood { position: absolute; left: 70px; right: 70px; top: 1500px; font: 400 54px "Mochiy Pop One"; }
+.story .mood small { display: block; font: 700 30px "Zen Maru Gothic"; opacity: .9; margin-top: 6px; }
+.story .badges-inline { position: absolute; left: 70px; right: 70px; top: 1650px; gap: 22px; }
+.story .foot { position: absolute; left: 70px; right: 70px; bottom: 40px; font: 700 26px "Zen Maru Gothic"; opacity: .85; }
+{% endblock %}
+{% block card %}
+  <div class="top"><small>@{{ c.owner }}'s microduck · day {{ c.day }}</small><h1 class="fit">{{ c.robot }}</h1></div>
+  <img class="sticker" src="{{ sticker }}" alt="">
+  <div class="bands">
+    <div class="band"><b>{{ c.walked }} {{ c.walked_unit }}</b><span>walked{% if c.facts %} · {{ c.facts[0] }}{% endif %}</span></div>
+    <div class="band"><b>{{ c.cuddles }}</b><span>cuddles · {{ c.pets }} pets</span></div>
+    <div class="band"><b>{{ c.falls }}</b><span>oopsie falls{% if c.facts|length > 1 %} · {{ c.facts[1] }}{% endif %}</span></div>
+  </div>
+  <div class="mood">{{ c.status.title }}<small>{{ c.status.line }} · {{ c.personality }}{% if c.sign %} · a {{ c.sign }}{% endif %}</small></div>
+  <div class="badges-inline">{% for b in c.badges[:5] %}{{ m.badge(b, 128) }}{% endfor %}</div>
+  <div class="foot">microduck vet book ♡ hf.co/datasets/{{ c.dataset }}</div>
+{% endblock %}

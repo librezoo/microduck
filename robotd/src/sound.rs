@@ -248,6 +248,8 @@ pub struct Sound {
     /// (the end segment is being written) has to be told apart from both "riding" and
     /// "off", or the trigger restarts a ride that is still finishing.
     ride: Ride,
+    /// Sounds that started playing, for the vet book's chatterbox count.
+    played: u64,
     /// Bank missing is logged once, not per press.
     warned_missing: bool,
     /// The live parameters of whatever the writer thread is rendering — a theremin's pitch, or a
@@ -272,6 +274,7 @@ impl Sound {
             child: None,
             wheee_held: Arc::new(AtomicBool::new(false)),
             ride: Ride::Off,
+            played: 0,
             warned_missing: false,
             live: None,
             file_live: None,
@@ -381,11 +384,19 @@ impl Sound {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn();
+        if child.is_ok() {
+            self.played += 1;
+        }
         match child {
             Ok(mut c) if blocking => wait_bounded(&mut c, BLOCKING_PLAY_MAX),
             Ok(c) => self.child = Some(c),
             Err(e) => tracing::debug!(error = %e, tag, "aplay failed"),
         }
+    }
+
+    /// Sounds that have started playing since this process began.
+    pub fn played(&self) -> u64 {
+        self.played
     }
 
     /// Take the PCM for a live theremin, if this robot has a voice to play it in.

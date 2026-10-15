@@ -1,0 +1,76 @@
+{% extends "card.html" %}
+{% import "macros.html" as m %}
+{% block style %}
+/* gameboy: the console upright, as it is held — its screen shows the duck's pixel head (the robot's
+   own, from `robotctl vetbook`) — and beside it a big dot-matrix "player" screen with the stats. */
+.gameboy { --shell: #d8d3c6; --shell2: #c3bdaf; --label: #4b3f9a; --bg1: #2a2440; --bg2: #3b2f5c; background: radial-gradient(circle at 30% 40%, var(--bg2), var(--bg1)); }
+.gameboy.pal1 { --shell: #f2c6d2; --shell2: #e1a7b8; --label: #a03a5a; --bg1: #3a2030; --bg2: #5a2f45; }
+.gameboy.pal2 { --shell: #b8e0d2; --shell2: #97cab9; --label: #2f6a5a; --bg1: #1d3330; --bg2: #2a4a44; }
+.gameboy.pal3 { --shell: #f6d77a; --shell2: #e6c158; --label: #7a4a10; --bg1: #3a2a14; --bg2: #57401c; }
+.gameboy::before { content: ""; position: absolute; inset: 0; background: radial-gradient(#ffffff10 2px, transparent 2.5px) 0 0 / 24px 24px; }
+
+/* the console: 360 × 590, the real one's proportions, tilted a little */
+.gameboy .console { position: absolute; left: 70px; top: 22px; width: 360px; height: 588px; transform: rotate(-4deg); }
+.gameboy .shell { position: absolute; inset: 0; background: linear-gradient(180deg, var(--shell), var(--shell2)); border-radius: 18px 18px 80px 18px; box-shadow: 0 18px 34px #0008, inset 0 -6px 0 #0002, inset 0 4px 0 #ffffff55; }
+.gameboy .groove { position: absolute; left: 0; right: 0; top: 26px; height: 3px; background: #0001; }
+.gameboy .bezel { position: absolute; left: 26px; top: 46px; width: 308px; height: 254px; background: #5d5d6e; border-radius: 10px 10px 44px 10px; }
+.gameboy .bezel small { position: absolute; left: 22px; top: 9px; font: 400 10px "Silkscreen"; color: #c8c8d6; letter-spacing: .12em; }
+.gameboy .led { position: absolute; left: 10px; top: 96px; width: 10px; height: 10px; border-radius: 50%; background: #e23a4e; box-shadow: 0 0 8px #e23a4e; }
+.gameboy .screen { position: absolute; left: 44px; top: 30px; width: 220px; height: 198px; background: #9bbc0f; box-shadow: inset 0 0 0 3px #8bac0f; overflow: hidden; color: #0f380f; }
+.gameboy .screen::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, #0f380f0f 0 2px, transparent 2px 4px); }
+.gameboy .screen .head { position: absolute; left: 20px; top: 34px; width: 180px; }
+.gameboy .screen .nm { position: absolute; left: 0; right: 0; top: 8px; text-align: center; font: 700 18px "Silkscreen"; white-space: nowrap; }
+.gameboy .screen .press { position: absolute; left: 0; right: 0; bottom: 8px; text-align: center; font: 400 22px "VT323"; }
+.gameboy .brand { position: absolute; left: 30px; top: 312px; font: italic 700 21px "Silkscreen"; color: var(--label); letter-spacing: .04em; }
+.gameboy .dpad { position: absolute; left: 40px; top: 380px; width: 96px; height: 96px; }
+.gameboy .dpad::before, .gameboy .dpad::after { content: ""; position: absolute; background: #2b2b33; border-radius: 5px; box-shadow: 0 3px 0 #0005; }
+.gameboy .dpad::before { left: 32px; top: 0; width: 32px; height: 96px; }
+.gameboy .dpad::after { left: 0; top: 32px; width: 96px; height: 32px; }
+.gameboy .btn { position: absolute; width: 50px; height: 50px; border-radius: 50%; background: #a0285a; box-shadow: 0 4px 0 #6a1a3a; color: #f6d6e2; display: grid; place-items: center; font: 700 15px "Silkscreen"; }
+.gameboy .ss { position: absolute; width: 46px; height: 12px; background: #8a8796; border-radius: 8px; transform: rotate(-25deg); }
+.gameboy .grille { position: absolute; right: 30px; bottom: 34px; width: 70px; height: 56px; transform: rotate(-25deg); background: repeating-linear-gradient(90deg, #0003 0 5px, transparent 5px 12px); border-radius: 4px; }
+
+/* the player screen */
+.gameboy .player { position: absolute; left: 500px; top: 46px; width: 650px; height: 540px; background: #9bbc0f; border-radius: 14px; box-shadow: 0 0 0 12px #5d5d6e, 0 18px 34px #0008; color: #0f380f; overflow: hidden; font-family: "VT323", monospace; padding: 22px 30px; }
+.gameboy .player::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(0deg, #0f380f0f 0 2px, transparent 2px 4px); }
+.gameboy .player h2 { margin: 0; font: 700 34px "Silkscreen"; white-space: nowrap; display: flex; justify-content: space-between; }
+.gameboy .player h2 span { font: 400 34px "VT323"; }
+.gameboy .player h2 b { flex: 1; min-width: 0; margin-right: 16px; }
+.gameboy .player h2 span { flex: none; }
+.gameboy .player .sub { font-size: 26px; margin: 2px 0 10px; }
+.gameboy .player .row { display: flex; font-size: 34px; line-height: 1.12; white-space: nowrap; }
+.gameboy .player .row i { flex: 1; overflow: hidden; font-style: normal; opacity: .55; }
+.gameboy .player .row i::before { content: "........................................................................"; }
+.gameboy .player .msg { position: absolute; left: 20px; right: 20px; bottom: 18px; border: 4px solid #0f380f; background: #8bac0f; padding: 8px 14px; font-size: 30px; line-height: 1.05; }
+.gameboy .player .msg::after { content: "▼"; position: absolute; right: 12px; bottom: 4px; font-size: 18px; }
+{% endblock %}
+{% block card %}
+  <div class="console">
+    <div class="shell"></div><div class="groove"></div>
+    <div class="bezel"><small>DOT MATRIX WITH STEREO SOUND</small><div class="led"></div>
+      <div class="screen">
+        <div class="nm fit">{{ c.robot|upper }}</div>
+        <img class="pix head" src="{{ pixel_gb }}" alt="">
+        <div class="press">PRESS START</div>
+      </div>
+    </div>
+    <div class="brand">MICRODUCK BOY</div>
+    <div class="dpad"></div>
+    <div class="btn" style="left:218px;top:432px">B</div>
+    <div class="btn" style="left:284px;top:398px">A</div>
+    <div class="ss" style="left:110px;top:512px"></div><div class="ss" style="left:170px;top:512px"></div>
+    <div class="grille"></div>
+  </div>
+  <div class="player">
+    <h2><b class="fit">PLAYER 1: {{ c.robot|upper }}</b><span>LV {{ [1, (c.awake_hours / 10)|int + 1]|max }}</span></h2>
+    <div class="sub">@{{ c.owner|upper }} · DAY {{ c.day }} · {{ c.personality|upper }}</div>
+    <div class="row"><span>WALKED</span><i></i><span>{{ c.walked }}{{ c.walked_unit|upper }}</span></div>
+    <div class="row"><span>CUDDLES</span><i></i><span>{{ c.cuddles }}</span></div>
+    <div class="row"><span>PETS</span><i></i><span>{{ c.pets }}</span></div>
+    <div class="row"><span>OOPSIE FALLS</span><i></i><span>{{ c.falls }}</span></div>
+    <div class="row"><span>SPINS</span><i></i><span>{{ c.spins }}</span></div>
+    {% if c.favourite %}<div class="row"><span>{{ c.favourite|upper }}</span><i></i><span>×{{ c.favourite_count }}</span></div>{% endif %}
+    <div class="row"><span>BADGES</span><i></i><span>{{ c.badges|length }}{% if c.badges %} · {{ c.badges[0].name|upper }}{% endif %}</span></div>
+    <div class="msg">{{ c.status.title|upper }} {{ c.facts[0]|upper if c.facts else c.status.line|upper }}</div>
+  </div>
+{% endblock %}

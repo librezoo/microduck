@@ -38,6 +38,17 @@ duck-ble = { path = "../duck-ble" }
 # rather than kept as a number here that could drift.
 duck-ipc-proto = { path = "../duck-ipc-proto" }
 
+# `udp-pad` sends the pad plugged into this machine to a duck's `netpadd`: the wire format and
+# the button bits come from the crate the robot decodes them with, `gilrs` reads the pad.
+pad-map = { path = "../pad-map" }
+gilrs = "0.11"
+# `udp-pad`'s live view, drawn as `robotctl monitor` draws its own: the same crate and features,
+# so the two look alike and restore the terminal the same way when something panics mid-frame.
+ratatui = { version = "0.30.2", default-features = false, features = [
+    "crossterm",
+    "layout-cache",
+] }
+
 # `btleplug` rather than `bluer`, because this runs on a developer's machine: CoreBluetooth on
 # macOS, BlueZ on Linux, WinRT on Windows. `bluer` would make the client Linux-only, which defeats
 # the point of having one.
@@ -66,7 +77,19 @@ futures = "0.3"
 # developer sits at, and the interesting part of `open` is finding the robot, not spawning a process.
 webbrowser = "1.2.4"
 serde_json.workspace = true
+socket2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+# libdbus compiled in rather than linked, so the Linux binary needs nothing from the machine but
+# the D-Bus daemon BlueZ already runs. That is what lets one wheel serve every distribution
+# (`uvx duckctl`, see `pyproject.toml`): a dynamically linked libdbus is outside the manylinux
+# policy, so the wheel would have to graft a copy in anyway. It also drops `libdbus-1-dev` from
+# what a `cargo install` needs. Not a dependency of ours to call — only its feature matters here.
+[target.'cfg(target_os = "linux")'.dependencies]
+libdbus-sys = { version = "0.2", features = ["vendored"] }
 
 # `advwatch` measures how often an advertisement actually arrives. It lives here rather than with
 # `btd` for the same reason the client does: it is a scanner, and scanners run on laptops.

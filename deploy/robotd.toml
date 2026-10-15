@@ -472,6 +472,68 @@ mode = "walk"
 # Needs [audio] on, since a duck with no voice has nothing to sing with.
 # accept = false
 
+[idle]
+# The robot looking around while nothing is happening: after `after_s` with no motion asked for
+# and nobody steering the head, it glances somewhere, holds the look while its gaze shifts a
+# little around it, then picks somewhere new. A slow drift and a breath ride on top, and the
+# longer it is left alone the calmer it gets; any motion fades it out. It is added on top of
+# whatever the head was last asked to do, so a client steering the head is never fought.
+#
+# Angles are radians, durations seconds. All of it is taste: these are the knobs for how alive it
+# reads. Read once at startup, so a change needs robotd restarted.
+# enabled = true
+# after_s = 2.0
+# fade_s = 1.5
+
+# Where a glance goes: up to glance_yaw left or right and glance_pitch up or down, with the neck
+# leaning up to glance_neck forward or back under it and the beak opening up to glance_mouth
+# (0..1), sometimes
+# (tilt_chance) with the curious sideways tilt, sometimes (centre_chance) back to the middle, and
+# always at least glance_min away from the last look.
+# glance_yaw = 0.6
+# glance_pitch = 0.2
+# glance_neck = 0.15
+# glance_mouth = 0.4
+# tilt_roll = 0.3
+# tilt_chance = 0.25
+# centre_chance = 0.25
+# glance_min = 0.2
+
+# How long a look is held before it picks somewhere new, and how long the move there takes:
+# move_min_s plus move_s_per_rad for every radian travelled.
+# hold_min_s = 1.0
+# hold_max_s = 3.0
+# move_min_s = 0.3
+# move_s_per_rad = 1.0
+
+# While holding a look, the gaze shifts by up to nudge_yaw / nudge_pitch around it every
+# nudge_every_min_s to nudge_every_max_s — what keeps a held look from reading as frozen.
+# Zero amplitudes turn it off.
+# nudge_yaw = 0.08
+# nudge_pitch = 0.05
+# nudge_every_min_s = 0.4
+# nudge_every_max_s = 1.2
+
+# The drift on every head axis, and the breath: metres of body height per breath_period_s,
+# standing network only.
+# drift = 0.04
+# drift_hz = 0.15
+# breath_m = 0.001
+# breath_period_s = 3.6
+
+# Dozing: the glances get smaller, slower and further apart over about doze_tau_s, down to
+# doze_floor of their liveliness. 1 never dozes.
+# doze_tau_s = 90.0
+# doze_floor = 0.5
+
+# Yawning, once it has been idle yawn_after_s: about every yawn_every_s (0 never), for yawn_s,
+# the mouth opens to yawn_open and the head tips by yawn_pitch — signed, negative is up. Silent.
+# yawn_after_s = 45.0
+# yawn_every_s = 90.0
+# yawn_s = 3.0
+# yawn_open = 0.6
+# yawn_pitch = -0.15
+
 [media]
 # What mediad streams: the camera, and at what quality. Read by mediad at startup, so a change
 # here needs `systemctl restart mediad` — not robotd. `robotctl configure` offers the right one.
@@ -562,14 +624,64 @@ mode = "walk"
 # while walking, per axis and per direction; the stick is linear between centre and each bound.
 # Signed in the robot's frame — vx forward, vy left, vyaw counter-clockwise from above — so each
 # `_min` is negative, and zero switches that direction off. A positive `_min` is refused rather
-# than guessed at. Roller mode keeps its own shaping.
+# than guessed at. Roller limits are configured separately under [pad_roller].
 #
 # This is what the pad asks for, not a limit on the robot: the policy only follows commands
 # inside the range it was trained on.
 # [pad_drive]
-# vx_max = 0.3
-# vx_min = -0.3
+# vx_max = 0.4
+# vx_min = -0.4
 # vy_max = 0.3
 # vy_min = -0.3
-# vyaw_max = 1.5
-# vyaw_min = -1.5
+# vyaw_max = 1.0
+# vyaw_min = -1.0
+
+# ── Pad joystick axes ──────────────────────────────────────────────────────────────────────
+# Read by `padd` and `netpadd`, like [pad]; all of it reloads within a second.
+# Only overrides need to be written. Modes: drive, head, head_drive, body_pose.
+# Every command binding has source (left_x/left_y/right_x/right_y/none), invert and gain.
+# Missing fields keep the binding's defaults, including direction. Gain is applied before
+# clamping to full deflection and scaling to physical limits. No deadzone rescaling.
+# [pad_axes]
+# deadzone = 0.1
+#
+# Example: steer with the left stick instead of the right, at lower sensitivity.
+# [pad_axes.drive.vyaw]
+# source = "left_x"
+# gain = 0.7
+# invert = true
+#
+# Head limits in radians. Also bound controller-IMU head targets.
+# [pad_head]
+# neck_pitch_max = 2.5
+# head_pitch_max = 2.5
+# head_yaw_max = 2.5
+# head_roll_max = 2.5
+#
+# Body height in metres, tilt in radians; pitch is unbound by default.
+# [pad_body]
+# z_min = -0.025
+# z_max = 0.010
+# pitch_max = 0.2618
+# roll_max = 0.2618
+#
+# Roller-mode speed limits in m/s and rad/s. Strafe is disabled by default.
+# [pad_roller]
+# vx_min = -0.5
+# vx_max = 0.6
+# vy_min = 0.0
+# vy_max = 0.0
+# vyaw_min = -0.3
+# vyaw_max = 0.3
+
+# ── Pad over UDP ────────────────────────────────────────────────────────────────────────────
+#
+# Read by `padd` and `netpadd`. On, `netpadd` takes gamepad state from a program on the LAN —
+# `duckctl udp-pad`, or your own; docs/robot/udp-pad.md has the wire format — and `padd` stands
+# down. Restart both after changing it: `sudo systemctl restart padd netpadd`.
+# [netpad]
+# enabled = false
+# port = 4210
+# max_hz = 30          # intent frames a second to robotd, at most, 10–100
+# stale_ms = 300       # nothing new this long stops the robot; below [safety] deadman_ms
+# timeout_ms = 1000    # silence that counts as the client gone; at least stale_ms
