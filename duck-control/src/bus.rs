@@ -40,6 +40,23 @@ const READ_LEN: u8 = 12;
 /// 0.229 rev/min per count, in rad/s.
 const RAD_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
+/// No joint of this robot turns faster than this. An XL330's `velocity_limit` is 445 counts, 10.7 rad/s, and the fastest
+/// reading in a minute of a robot thrashing after a fall was 12.4 rad/s. A reading beyond it is a glitch of the servo's
+/// velocity register (seen: 402331 rad/s and -1572 rad/s on this robot's KPower servos, once each in 3000 reads, with a
+/// valid packet and a sane position next to it) and is not a velocity. The policy takes velocities as input: one
+/// such value in a calm stand made it command a target 174 degrees from the joint the very next tick.
+const MAX_SANE_VELOCITY: f64 = 25.0;
+
+/// The velocity to hand the policy for one joint: `reading` when it is possible, else the last possible one.
+/// The second value says the reading was thrown away.
+fn sane_velocity(reading: f64, last: f64) -> (f64, bool) {
+    if reading.is_finite() && reading.abs() <= MAX_SANE_VELOCITY {
+        (reading, false)
+    } else {
+        (last, true)
+    }
+}
+
 /// The second, slower block: `present_input_voltage` (144, `u16`) then `present_temperature`
 /// (146, `u8`). Three bytes covers both, so voltage and thermals cost *one* extra transaction
 /// between them rather than two — see [`RobotIo::slow_sensors`].
@@ -160,6 +177,9 @@ pub struct DynamixelIo {
     /// the same sample, which means the policy is being fed dead orientation data — a
     /// failure that is invisible unless someone counts it. Known to happen.
     stale_imu: StaleImuTracker,
+    /// The last velocity that passed [`sane_velocity`], per joint, and how many readings did not.
+    last_velocity: [f64; NUM_JOINTS],
+    velocity_glitches: u64,
 }
 
 impl DynamixelIo {
@@ -184,6 +204,8 @@ impl DynamixelIo {
             fast_sync_read,
             imu: SflpDecoder::new(imu_mount),
             stale_imu: StaleImuTracker::default(),
+            last_velocity: [0.0; NUM_JOINTS],
+            velocity_glitches: 0,
         })
     }
 
@@ -814,7 +836,25 @@ impl RobotIo for DynamixelIo {
             // [0..2] present_pwm, unused · [2..4] current · [4..8] velocity · [8..12] position
             sensors.currents_ma[joint] = (i16::from_le_bytes([block[2], block[3]]) as f64).abs();
             let velocity = i32::from_le_bytes([block[4], block[5], block[6], block[7]]);
-            sensors.velocities[joint] = velocity as f64 * RAD_PER_SEC_PER_COUNT;
+            let reading = velocity as f64 * RAD_PER_SEC_PER_COUNT;
+            let (velocity, glitch) = sane_velocity(reading, self.last_velocity[joint]);
+            if glitch {
+                self.velocity_glitches += 1;
+                // The first, and then one in a hundred: a glitch every half minute is worth knowing about, a journal full of
+                // them is not.
+                if self.velocity_glitches == 1 || self.velocity_glitches.is_multiple_of(100) {
+                    tracing::warn!(
+                        joint = JOINT_NAMES[joint],
+                        reading_rad_s = reading,
+                        kept_rad_s = velocity,
+                        glitches = self.velocity_glitches,
+                        "impossible servo velocity reading; keeping the last good one"
+                    );
+                }
+            } else {
+                self.last_velocity[joint] = velocity;
+            }
+            sensors.velocities[joint] = velocity;
             let position = i32::from_le_bytes([block[8], block[9], block[10], block[11]]);
             sensors.positions[joint] =
                 self.checked_model_position(joint, (2.0 * PI * position as f64 / 4096.0) - PI)?;
@@ -1025,6 +1065,24 @@ mod tests {
     /// One silent servo is the only case a swap can be inferred from. With two silent there is
     /// no telling which the fresh servo replaces, and guessing would flash a leg joint as a neck
     /// joint; with none silent a stray fresh servo is nobody's replacement.
+    /// A velocity no joint can have is a glitch of the servo's register, not a motion.
+    #[test]
+    fn an_impossible_velocity_reading_is_replaced_by_the_last_good_one() {
+        assert_eq!(sane_velocity(3.5, 1.0), (3.5, false));
+        assert_eq!(
+            sane_velocity(-12.4, 1.0),
+            (-12.4, false),
+            "the fastest seen"
+        );
+        assert_eq!(
+            sane_velocity(402_331.44, 1.5),
+            (1.5, true),
+            "seen on the KPower servos"
+        );
+        assert_eq!(sane_velocity(-1_571.6, -0.5), (-0.5, true));
+        assert_eq!(sane_velocity(f64::NAN, 0.25), (0.25, true));
+    }
+
     /// LOCAL-ZERO: the one-turn window of a multi-turn counter, in rustypot's radians (2048 ticks = 0).
     #[test]
     fn a_multi_turn_reading_outside_one_turn_is_counted_in_whole_turns() {
