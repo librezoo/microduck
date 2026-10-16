@@ -1,0 +1,5 @@
+# Build host only. The board's NPU runtime does not need PyTorch or MobileCLIP.
+ultralytics==8.3.228
+onnx==1.17.0
+onnxruntime==1.23.2
+clip @ git+https://github.com/ultralytics/CLIP.git@7ffa84b3bfa40c42ecc1c77147a855e69cb2dd40

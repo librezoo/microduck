@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "backend": "acuity-pcq-int8-nbg",
+  "classes": [
+    "refrigerator",
+    "cabinet",
+    "shelf",
+    "bed",
+    "sofa",
+    "chair",
+    "table",
+    "desk",
+    "television",
+    "monitor",
+    "laptop",
+    "keyboard",
+    "computer mouse",
+    "pen",
+    "pencil",
+    "marker",
+    "notebook",
+    "book",
+    "mobile phone",
+    "tablet",
+    "headphones",
+    "remote control",
+    "printer",
+    "scissors",
+    "stapler",
+    "eyeglasses",
+    "keys",
+    "wallet",
+    "door",
+    "cup",
+    "mug",
+    "bottle",
+    "thermos",
+    "beverage can",
+    "bowl",
+    "basket",
+    "box",
+    "cardboard box",
+    "tissue box",
+    "trash can",
+    "potted plant",
+    "lamp",
+    "clock",
+    "microwave",
+    "oven",
+    "sink",
+    "toy",
+    "teddy bear",
+    "stuffed animal",
+    "apple",
+    "banana",
+    "person"
+  ],
+  "class_count": 52,
+  "classes_sha256": "08e90137f66c7edab39e225160e2759e33b519838dd3adef7edb36b676b511dd",
+  "base_sha256": "8e439445c87338b79d9ce21dec109f4621e26df67e94d26ea1a98c1e64dce3e3",
+  "checkpoint_sha256": "6125755b9b9dc77881003c82e23c66368c32f324bcf91a14e099bd0a1ae4970e",
+  "onnx": "yoloe52split.onnx",
+  "onnx_sha256": "efedaefc4669f764c54cfe2f074557f5539f14ee8257eb1de8c025b1fd50e1cd",
+  "ultralytics": "8.3.228",
+  "torch": "2.14.1",
+  "input": {
+    "shape": [
+      1,
+      3,
+      384,
+      640
+    ],
+    "layout": "NCHW",
+    "color": "RGB",
+    "scale": 0.00392156862745098,
+    "letterbox_value": 114
+  },
+  "outputs": [
+    {
+      "name": "/model.23/Mul_2_output_0",
+      "shape": [
+        1,
+        4,
+        5040
+      ],
+      "role": "boxes_xywh"
+    },
+    {
+      "name": "/model.23/Sigmoid_output_0",
+      "shape": [
+        1,
+        52,
+        5040
+      ],
+      "role": "class_scores"
+    },
+    {
+      "name": "/model.23/Concat_output_0",
+      "shape": [
+        1,
+        32,
+        5040
+      ],
+      "role": "mask_coefficients"
+    },
+    {
+      "name": "output1",
+      "shape": [
+        1,
+        32,
+        96,
+        160
+      ],
+      "role": "prototypes"
+    }
+  ],
+  "camera": {
+    "capture_hw": [
+      360,
+      640
+    ],
+    "sensor_mode_hw": [
+      1080,
+      1920
+    ],
+    "rotate": 0,
+    "undistort": false,
+    "lens_nominal_degrees": 200
+  },
+  "source_reference": "librezoo/libre_semantic_world@11bbd72",
+  "source_onnx_sha256": "096d57caf0a08b9d58934dc96aac7e7f344770b8063db01ebf105dbdc5964245",
+  "nbg": "yoloe52split-pcq.nb",
+  "nbg_sha256": "09fd930f3889a8844fea8ca8902be5dcb24bc909e9e8ba2882ac6b3cbbdb2dc9",
+  "toolchain": {
+    "acuity": "6.30.22",
+    "docker": "ubuntu-npu:v2.0.10.2",
+    "target": "VIP9000NANODI_PLUS_PID0X1000003B",
+    "runtime": "VIPLite 2.0.3.2-AW-2024-08-30"
+  },
+  "validation": "single_scene_smoke_not_accuracy_accepted",
+  "quantization": {
+    "input": {
+      "dtype": "int8",
+      "scale": 0.003921568859368563,
+      "zero_point": -128,
+      "shape": [
+        1,
+        3,
+        384,
+        640
+      ]
+    },
+    "outputs": [
+      {
+        "role": "boxes_xywh",
+        "shape": [
+          1,
+          4,
+          5040
+        ],
+        "dtype": "int8",
+        "scale": 2.496826171875,
+        "zero_point": -128
+      },
+      {
+        "role": "class_scores",
+        "shape": [
+          1,
+          52,
+          5040
+        ],
+        "dtype": "int8",
+        "scale": 0.002978939563035965,
+        "zero_point": -128
+      },
+      {
+        "role": "mask_coefficients",
+        "shape": [
+          1,
+          32,
+          5040
+        ],
+        "dtype": "int8",
+        "scale": 0.037778690457344055,
+        "zero_point": -2
+      },
+      {
+        "role": "prototypes",
+        "shape": [
+          1,
+          32,
+          96,
+          160
+        ],
+        "dtype": "int8",
+        "scale": 0.02816954255104065,
+        "zero_point": -118
+      }
+    ]
+  },
+  "benchmark": {
+    "loops": 10,
+    "wall_ms_median": 24.554,
+    "wall_ms_min": 24.309,
+    "wall_ms_max": 25.456,
+    "includes_capture_or_prepost": false
+  }
+}
