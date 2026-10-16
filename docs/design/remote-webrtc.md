@@ -173,11 +173,11 @@ out is not merely deferral — §6 is about what it removes.
 negotiation. Verified on hardware; the four encoder properties that are decisions rather than
 defaults are in [`media-bringup.md`](../project/media-bringup.md).
 
-**The pipeline tees raw NV12 before the encoder**, and that placement is deliberate:
+**The pipeline tees raw video before the encoder**, and that placement is deliberate:
 
 ```text
                               ┌─ queue ─ mpph264enc ─ h264parse ─ webrtcsink
-capture ─ NV12 ─ capsfilter ─ tee
+capture ─ raw ─ capsfilter ─ tee
                               └─ queue(leaky, 1) ─ appsink ─ a frame on request
 ```
 
@@ -186,11 +186,25 @@ a state blob", not a 30 fps H.264 track to decode — and `architecture.md` §2 
 to the sensor, deriving features rather than shipping pixels to `robotd`. Both need *pixels*, and
 taking them off the encoded branch would mean decoding what was just encoded.
 
-NV12 throughout, because that is what the rkisp path emits and what `mpph264enc` accepts, so
-nothing converts anywhere. Each branch has its own `queue` — a `tee` without them runs both from
+Rockchip captures UYVY as measured above; the Allwinner backend captures NV12 through its vendor
+ISP. Each branch has its own `queue` — a `tee` without them runs both from
 one thread, so a slow reader would stall the video track — and the raw one is leaky and one buffer
 deep, which is the *latest* snapshot `architecture.md` §2 asks for rather than a queue of stale
 ones. A stalled reader costs frames, never the encoder.
+
+Requested snapshots use the existing packed UYVY `media.frame` contract on both backends.
+The appsink maps `GstVideoMeta` plane strides, strips UYVY row padding, or repacks NV12 into UYVY
+only for requested frames. The encoder branch retains the native capture format. A local
+perception process reads this socket; it must not open the camera independently or use a JPEG
+display stream as model input.
+
+`media.camera_backend` defaults to `rockchip`. Selecting `allwinner` uses vendor ISP AE/AWB,
+skips Rockchip sensor controls, and defaults the mount angle to zero. Its source holds
+`/run/lock/microduck-imx219.lock` to exclude standalone camera tools. The `mediad-capture` binary
+exposes the same raw source and IPC server for commissioning without WebRTC; run it instead of
+full `mediad`, never alongside it. A733 capture modes, toolchain and validation limits are
+recorded in [the dated perception bring-up](../project/orangepi-zero3w-perception.md);
+the A733 WebRTC/encoder path is not yet validated.
 
 **A frame is copied out of the appsink only when a reader has asked for one.** The readers on this
 branch want two frames a second between them — auto-exposure meters one every 500 ms, the duck
@@ -533,7 +547,8 @@ means a measurement: *this* robot's, written into `[media.intrinsics]`, or — t
 metrology can tell that it needs to ask.
 
 **And the key is absent when the geometry is unknown**, rather than present and wrong. That is a
-robot streaming a test pattern, or one where `media-ctl` would not set the sensor mode — in which
+robot streaming a test pattern, the uncalibrated Allwinner lens, or one where `media-ctl`
+would not set the sensor mode — in which
 case the sensor is in its 3280×2464 boot mode, whose field of view is the whole array rather than
 the 1920×1080 crop, and every intrinsic would be off by about 1.7×. `mediad::camera` has the
 arithmetic and the mode table, including the fact that reading 720p off the sensor would *narrow*
