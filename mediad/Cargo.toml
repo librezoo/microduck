@@ -1,5 +1,6 @@
 [package]
 name = "mediad"
+default-run = "mediad"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -89,7 +90,7 @@ rand = "0.10.2"
 # verbatim; the rendezvous protocol is the first one this daemon has to *write*.
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "io-util", "sync", "time", "macros", "signal"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 
@@ -105,7 +106,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 # plugin requires rather than at what the board happens to have means a build failure here would
 # name a real incompatibility rather than an accident of one robot's package versions.
 gstreamer = { version = "0.24", features = ["v1_22"] }
-# `appsink`, for the raw NV12 branch off the tee — perception and `get_frame` both want pixels,
+# `appsink`, for the raw video branch off the tee — perception and `get_frame` both want pixels,
 # and taking them off the encoded branch would mean decoding what was just encoded.
 gstreamer-app = { version = "0.24", features = ["v1_22"] }
 gstreamer-webrtc = { version = "0.24", features = ["v1_22"] }

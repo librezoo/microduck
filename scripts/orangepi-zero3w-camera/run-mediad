@@ -1,0 +1,12 @@
+#!/bin/sh
+# The ISP/plugin environment must be established before GStreamer loads any libraries.
+set -eu
+root=${MICRODUCK_AWISP_ROOT:-/opt/microduck-awisp}
+test -f "$root/lib/libmicroduck-imx219-compat.so" || {
+    echo "Install the Allwinner IMX219 ISP support first" >&2; exit 1;
+}
+export LD_PRELOAD="$root/lib/libmicroduck-imx219-compat.so${LD_PRELOAD:+:$LD_PRELOAD}"
+export LD_LIBRARY_PATH="$root/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export GST_PLUGIN_PATH="$root/gst${GST_PLUGIN_PATH:+:$GST_PLUGIN_PATH}"
+export GST_REGISTRY="${XDG_CACHE_HOME:-/tmp}/microduck-awisp-mediad-registry.bin"
+exec "$@"

@@ -1,0 +1,10 @@
+# Camera commissioning only. Merge [media] into the robot's existing config for full mediad.
+[media]
+source = "camera"
+camera_backend = "allwinner"
+# YOLOE consumes 640x384: 640x360 pixels plus 12 padded rows on each side.
+# The ISP scales the sensor's 1080p mode, preserving its view without a CPU resize.
+quality = "360p30"
+
+[duck_detector]
+enabled = false

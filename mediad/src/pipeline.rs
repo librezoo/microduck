@@ -8,7 +8,7 @@
 //!
 //! ```text
 //!                                                ┌─ queue ─ webrtcsink ─ setup → mpph264enc
-//! videotestsrc | camera ─ NV12 ─ videoflip ─ tee ┤          │
+//! videotestsrc | camera ─ raw ─ videoflip ─ tee ┤          │
 //!                                                └─ queue ─ │  run-signalling-server=true
 //!                                       (leaky)     │
 //!                                          │        └─ consumer-added → "control" channel
@@ -16,16 +16,17 @@
 //!                                   a frame on request
 //! ```
 //!
-//! **The tee is on raw NV12, before the encoder**, and that placement is the point of it.
+//! **The tee is on raw video, before the encoder**, and that placement is the point of it.
 //! `architecture.md` §5.3 wants a frame on demand for a server-side program — "it wants a frame
 //! every second or two plus a state blob", not a 30 fps H.264 track to decode — and §2 wants
 //! perception next to the sensor, deriving features rather than shipping pixels to `robotd`. Both
 //! need pixels, and taking them off the encoded branch would mean decoding what we just encoded.
 //!
-//! NV12 because that is what the rkisp capture path emits and what `mpph264enc` takes, so nothing
-//! *converts* anywhere: no `videoconvert`, and no RGA pass, between capture and either consumer.
+//! Rockchip captures UYVY; Allwinner captures NV12 with its vendor ISP. Requested snapshots
+//! are normalized into packed UYVY, preserving the existing local frame contract. The encoder
+//! branch keeps its native capture format.
 //!
-//! **Nothing converts and nothing rotates.** The head camera is mounted a quarter turn off, and for
+//! **The encoder branch does not rotate pixels.** The Rockchip head camera is mounted a quarter turn off, and for
 //! one afternoon this pipeline fixed that with a `videoflip` before the tee — which broke
 //! `mpph264enc`'s zero-copy path to the 2D engine and had MPP converting every frame in software:
 //! 97 °C, the CPU throttled to 408 MHz, 8 fps out of a 30 fps camera. Rotation is now the
@@ -226,8 +227,18 @@ pub enum Source {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Camera {
     pub device: String,
+    pub backend: robotd_params::CameraBackend,
     pub exposure: u32,
     pub analogue_gain: u32,
+}
+
+impl Camera {
+    fn capture_format(&self) -> &'static str {
+        match self.backend {
+            robotd_params::CameraBackend::Rockchip => CAPTURE_FORMAT,
+            robotd_params::CameraBackend::Allwinner => "NV12",
+        }
+    }
 }
 
 /// One raw frame off the tee, as the last one seen.
@@ -440,7 +451,7 @@ pub fn start(
             src
         }
         #[cfg(target_os = "linux")]
-        Source::Camera(camera) => camera_source(camera, fps)?,
+        Source::Camera(camera) => camera_source(camera, width, height, fps)?,
         // Not "unsupported": `[media] camera = true` off a robot is a config file copied from one,
         // and the fix is to name whichever of the other two sources was meant.
         #[cfg(not(target_os = "linux"))]
@@ -474,8 +485,12 @@ pub fn start(
     //
     // `mpph264enc` lists `UYVY` on its sink pad and converts on the SoC's 2D accelerator, so the
     // 4:2:2 to 4:2:0 step costs no CPU — the RGA was already doing one operation per frame.
+    let capture_format = match &source {
+        Source::Camera(camera) => camera.capture_format(),
+        _ => CAPTURE_FORMAT,
+    };
     let caps = gst::Caps::builder("video/x-raw")
-        .field("format", CAPTURE_FORMAT)
+        .field("format", capture_format)
         .field("width", width as i32)
         .field("height", height as i32)
         .field("framerate", gst::Fraction::new(fps as i32, 1))
@@ -625,7 +640,7 @@ pub fn start(
     // would fail negotiation on a quarter turn, and silently describe the wrong shape on a half
     // one.
     let out_caps = gst::Caps::builder("video/x-raw")
-        .field("format", CAPTURE_FORMAT)
+        .field("format", capture_format)
         .field("width", out_width as i32)
         .field("height", out_height as i32)
         .field("framerate", gst::Fraction::new(fps as i32, 1))
@@ -692,6 +707,7 @@ pub fn start(
         height,
         fps,
         consumers.clone(),
+        capture_format,
     )?;
 
     match flip.as_ref() {
@@ -743,6 +759,41 @@ pub fn start(
         "signalling server listening"
     );
     Ok((pipeline, channels_rx, frames, stream_branch))
+}
+
+/// Exercise the same camera adapter and frame rendezvous before WebRTC plugins are installed.
+/// This is a commissioning mode, not a second camera owner alongside `mediad`.
+#[cfg(target_os = "linux")]
+pub fn start_capture(
+    camera: &Camera,
+    width: u32,
+    height: u32,
+    fps: u32,
+) -> Result<(gst::Pipeline, Frames)> {
+    set_gstreamer_log_threshold();
+    gst::init()?;
+    bridge_gstreamer_log();
+    let pipeline = gst::Pipeline::new();
+    let src = camera_source(camera, width, height, fps)?;
+    let caps = gst::Caps::builder("video/x-raw")
+        .field("format", camera.capture_format())
+        .field("width", width as i32)
+        .field("height", height as i32)
+        .field("framerate", gst::Fraction::new(fps as i32, 1))
+        .build();
+    let sink = gst_app::AppSink::builder()
+        .caps(&caps)
+        .sync(false)
+        .max_buffers(1)
+        .drop(true)
+        .build();
+    let frames = Frames::default();
+    wire_frames(&sink, frames.clone(), width, height);
+    pipeline.add_many([&src, sink.upcast_ref()])?;
+    src.link(&sink)?;
+    watch_bus(&pipeline);
+    pipeline.set_state(gst::State::Playing)?;
+    Ok((pipeline, frames))
 }
 
 /// Build the valved H.264 branch: `queue ! valve ! videorate ! videoscale ! videoconvert ! enc !
@@ -1110,18 +1161,45 @@ fn wire_frames(appsink: &gst_app::AppSink, frames: Frames, width: u32, height: u
                 let Some(buffer) = sample.buffer() else {
                     return Ok(gst::FlowSuccess::Ok);
                 };
-                // `UYVY` is a single plane, so this maps without merging anything — unlike the
-                // `NM12` this used to carry, where mapping silently copied two non-contiguous
-                // planes into one block. The `to_vec` below is still a copy, and still the only
-                // one on this branch.
-                let Ok(map) = buffer.map_readable() else {
-                    // A buffer that will not map is not worth failing the pipeline over — the next
-                    // one is a frame away, and this branch is advisory by design. The request has
-                    // been taken by now, so the reader waits out its timeout rather than being
-                    // answered with nothing; a map that fails twice running is a pipeline in
-                    // trouble, not a frame to retry for.
-                    tracing::debug!("a raw frame would not map");
-                    return Ok(gst::FlowSuccess::Ok);
+                let data = (|| -> Result<Vec<u8>> {
+                    use gst_video::prelude::*;
+                    let caps = sample.caps().context("raw sample has no caps")?;
+                    let info = gst_video::VideoInfo::from_caps(caps)?;
+                    anyhow::ensure!(
+                        info.width() == width && info.height() == height,
+                        "capture geometry changed unexpectedly"
+                    );
+                    let video = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &info)?;
+                    let strides = video.plane_stride();
+                    let stride = |index: usize| -> Result<usize> {
+                        let value = strides[index];
+                        anyhow::ensure!(value > 0, "non-positive video stride");
+                        Ok(value as usize)
+                    };
+                    match info.format() {
+                        gst_video::VideoFormat::Uyvy => crate::raw_frame::packed_uyvy(
+                            video.plane_data(0)?,
+                            stride(0)?,
+                            width as usize,
+                            height as usize,
+                        ),
+                        gst_video::VideoFormat::Nv12 => crate::raw_frame::nv12_to_uyvy(
+                            video.plane_data(0)?,
+                            stride(0)?,
+                            video.plane_data(1)?,
+                            stride(1)?,
+                            width as usize,
+                            height as usize,
+                        ),
+                        other => anyhow::bail!("unsupported capture format: {other:?}"),
+                    }
+                })();
+                let data = match data {
+                    Ok(data) => data,
+                    Err(error) => {
+                        tracing::warn!(%error, "raw frame could not be packed");
+                        return Ok(gst::FlowSuccess::Ok);
+                    }
                 };
                 frames.deliver(Frame {
                     width,
@@ -1130,7 +1208,7 @@ fn wire_frames(appsink: &gst_app::AppSink, frames: Frames, width: u32, height: u
                     // Taken here rather than at delivery: this is the moment the buffer existed,
                     // and it costs one clock read on a frame someone already asked for.
                     captured_at: SystemTime::now(),
-                    data: map.as_slice().to_vec(),
+                    data,
                 });
 
                 Ok(gst::FlowSuccess::Ok)
@@ -1307,7 +1385,36 @@ fn make(name: &str) -> Result<gst::Element> {
 /// belong to the *subprocess* shape: `v4l2src` attaches a `GstVideoMeta` describing the real
 /// layout, and the frame loss has a cause with a small fix — see [`raise_capture_buffers`].
 #[cfg(target_os = "linux")]
-fn camera_source(camera: &Camera, fps: u32) -> Result<gst::Element> {
+fn camera_source(camera: &Camera, width: u32, height: u32, fps: u32) -> Result<gst::Element> {
+    if camera.backend == robotd_params::CameraBackend::Allwinner {
+        anyhow::ensure!(
+            matches!((width, height, fps), (1920, 1080, 30) | (640, 360, 30)),
+            "Allwinner IMX219 supports verified 360p30 and 1080p30 ISP outputs"
+        );
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open("/run/lock/microduck-imx219.lock")?;
+        lock.try_lock().context("camera is owned by another capture process; stop the standalone preview/snapshot first")?;
+        let src = make("v4l2src")?;
+        anyhow::ensure!(
+            src.has_property("en-awisp") && src.has_property("en-largemode"),
+            "Allwinner v4l2src is missing; use the A733 launcher with the ISP plugin and compatibility shim"
+        );
+        src.set_property("device", &camera.device);
+        // These vendor properties are integer flags, not GLib booleans.
+        src.set_property_from_str("en-awisp", "1");
+        src.set_property_from_str("en-largemode", "0");
+        src.set_property("do-timestamp", true);
+        // SAFETY: this private key is never read or replaced. GObject owns the File until the
+        // source is destroyed, so the advisory lock outlives every buffer from this capture.
+        unsafe {
+            src.set_data("microduck-allwinner-camera-lock", lock);
+        }
+        tracing::info!(device = %camera.device, "Allwinner ISP owns AE/AWB; NV12 capture, no Rockchip controls");
+        return Ok(src);
+    }
     pin_sensor_mode(fps)?;
 
     // Exposure and gain go through `extra-controls` rather than a `v4l2-ctl` call, so they are
@@ -1827,6 +1934,7 @@ fn meter_capture_rate(
     height: u32,
     fps: u32,
     consumers: Consumers,
+    format: &'static str,
 ) -> Result<()> {
     let target = fps as f64;
     struct Meter {
@@ -1880,7 +1988,7 @@ fn meter_capture_rate(
                     target_fps: fps,
                     width,
                     height,
-                    format: CAPTURE_FORMAT.to_owned(),
+                    format: format.to_owned(),
                     frames: meter.frames,
                     dropped: meter.dropped,
                     consumers: consumers.load(std::sync::atomic::Ordering::Relaxed),

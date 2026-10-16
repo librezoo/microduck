@@ -446,6 +446,30 @@ pub enum MediaSource {
 /// pins it to the enum in both directions.
 pub const MEDIA_SOURCE_LABELS: &[&str] = &["camera", "test"];
 
+/// Selects the ISP integration, not the sensor model: both boards use an IMX219.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CameraBackend {
+    #[default]
+    Rockchip,
+    Allwinner,
+}
+
+pub const CAMERA_BACKEND_LABELS: &[&str] = &["rockchip", "allwinner"];
+
+impl CameraBackend {
+    pub fn default_rotation(self) -> u32 {
+        match self {
+            Self::Rockchip => 90,
+            Self::Allwinner => 0,
+        }
+    }
+
+    pub fn software_exposure(self) -> bool {
+        self == Self::Rockchip
+    }
+}
+
 impl MediaSource {
     /// The sources, in [`MEDIA_SOURCE_LABELS`] order.
     pub const ALL: [MediaSource; 2] = [MediaSource::Camera, MediaSource::Test];
@@ -495,6 +519,8 @@ pub struct MediaParams {
     /// Where the video comes from: the head camera, or a test pattern for a board without one.
     /// [`MediaSource`] says why this is a name rather than a boolean.
     pub source: MediaSource,
+    /// Allwinner uses its own ISP 3A and NV12 capture; never apply Rockchip sensor controls.
+    pub camera_backend: CameraBackend,
     /// Frame size and rate, as one name. [`Quality`] says why it is one key and not four.
     pub quality: Quality,
     /// Starting video bitrate, bits per second. Unset follows the quality —
@@ -586,6 +612,7 @@ impl Default for MediaParams {
             // The camera, because a robot with a camera is the case. A board without one shows a
             // test pattern instead, and only if somebody names it.
             source: MediaSource::Camera,
+            camera_backend: CameraBackend::default(),
             quality: Quality::default(),
             bitrate: None,
             // Only a per-robot solve goes here; the family calibration is `mediad`'s fallback.
@@ -3223,6 +3250,21 @@ mod tests {
                 toml::from_str(&format!("[media]\nsource = \"{label}\"\n")).expect("parses");
             assert_eq!(parsed.media.source, source);
         }
+    }
+
+    #[test]
+    fn allwinner_profile_does_not_inherit_radxa_rotation_or_exposure_policy() {
+        let parsed: Params = toml::from_str(include_str!(
+            "../../scripts/orangepi-zero3w-camera/camera.toml"
+        ))
+        .unwrap();
+        assert_eq!(parsed.media.camera_backend, CameraBackend::Allwinner);
+        assert_eq!(parsed.media.geometry(), (640, 360, 30));
+        assert_eq!(parsed.media.camera_backend.default_rotation(), 0);
+        assert!(!parsed.media.camera_backend.software_exposure());
+        let old: Params = toml::from_str("[media]\nquality = '720p30'").unwrap();
+        assert_eq!(old.media.camera_backend.default_rotation(), 90);
+        assert!(old.media.camera_backend.software_exposure());
     }
 
     /// **The key that was replaced must not come back as a silent default.** A robot carrying the

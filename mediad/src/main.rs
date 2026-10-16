@@ -108,7 +108,7 @@ struct Args {
 
     /// How far the camera is mounted from upright, clockwise: 0, 90, 180 or 270.
     ///
-    /// **90 by default, because the head camera is mounted a quarter turn off**, and this is the one
+    /// Defaults to 90 for Rockchip and 0 for the Allwinner camera profile. This is the one
     /// place that fact is written down. It no longer means "rotate the pixels": it is told to
     /// whoever displays the video, and they rotate for free — the console with a CSS transform on
     /// the GPU. Rotating here cost 145% of a core and 22 fps; `pipeline::Rotation` has the numbers.
@@ -218,22 +218,6 @@ fn main() -> ExitCode {
         }
     };
 
-    // Refused before anything starts: a bad angle is a typo on a command line, and the daemon
-    // should say so rather than opening a camera first.
-    // Validated even when the pipeline will not use it, because it is still what every consumer is
-    // told about the mount — a typo should not reach the console as a rotation nobody can apply.
-    // 90 whatever the source. The head camera is mounted a quarter turn off and every consumer is
-    // told so — and the *simulated* camera is rolled the same way on purpose, so that a frame from a
-    // duck in MuJoCo needs the same turn as a frame from a duck on the desk. Overridable, because a
-    // scene could mount it differently, but there is one default and it is the robot's.
-    let rotate = args.rotate.unwrap_or(90);
-    let mount = match mediad::pipeline::Rotation::from_degrees(rotate) {
-        Ok(rotation) => rotation,
-        Err(e) => {
-            tracing::error!(error = %e, "mediad cannot start");
-            return ExitCode::FAILURE;
-        }
-    };
     // What the stream is and what it looks for, from `[media]` and `[duck_detector]` — see
     // `--config` and `mediad::config`. One file, one read: `[duck_detector]` is `mediad`'s section
     // too, and a second config file for the second daemon that wants one is how a fleet ends
@@ -245,6 +229,19 @@ fn main() -> ExitCode {
         .unwrap_or_else(mediad::config::default_path);
     let params = mediad::config::load(&config, explicit);
     let (media, detect) = (params.media, params.duck_detector);
+
+    // Validate the mount before opening a camera, even when the pipeline won't rotate pixels:
+    // every consumer receives this angle. The selected ISP profile supplies the default.
+    let rotate = args
+        .rotate
+        .unwrap_or(media.camera_backend.default_rotation());
+    let mount = match mediad::pipeline::Rotation::from_degrees(rotate) {
+        Ok(rotation) => rotation,
+        Err(e) => {
+            tracing::error!(error = %e, "mediad cannot start");
+            return ExitCode::FAILURE;
+        }
+    };
 
     // **What will actually run, not what is configured.** `[media] quality` is the rung a camera
     // streams at; a test pattern ignores it and runs at `TEST_PATTERN_GEOMETRY`, so a log line
@@ -401,6 +398,7 @@ fn main() -> ExitCode {
                 robotd_params::MediaSource::Camera => {
                     mediad::pipeline::Source::Camera(mediad::pipeline::Camera {
                         device: args.camera_device.clone(),
+                        backend: media.camera_backend,
                         exposure: args.exposure,
                         analogue_gain: args.analogue_gain,
                     })
@@ -478,6 +476,10 @@ fn main() -> ExitCode {
         // in this function cares: the other two sources have no sensor to meter.
         #[cfg(target_os = "linux")]
         let _exposure = match (&source, args.no_auto_exposure) {
+            (mediad::pipeline::Source::Camera(camera), _) if !camera.backend.software_exposure() => {
+                tracing::info!("Allwinner ISP owns exposure and white balance");
+                None
+            }
             (mediad::pipeline::Source::Camera(camera), false) => Some(mediad::exposure::spawn(
                 camera.device.clone(),
                 frames.clone(),
@@ -545,6 +547,9 @@ fn main() -> ExitCode {
             // The MuJoCo twin renders a known field of view, so publish its exact geometry — twin
             // recordings then self-describe (no `--calib` needed on the duckslam side).
             mediad::camera::Intrinsics::sim(width, height)
+        } else if media.camera_backend == robotd_params::CameraBackend::Allwinner {
+            // The 200-degree lens has no calibration. The Radxa family solve is unrelated.
+            None
         } else {
             mediad::camera::Intrinsics::published(
                 media.intrinsics.as_ref(),

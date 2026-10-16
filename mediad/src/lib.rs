@@ -23,6 +23,8 @@ pub mod camera;
 pub mod config;
 /// The account credential `updaterd` writes, read by the two things here that need it.
 pub mod producer;
+/// Normalize driver strides and NV12 into the existing packed raw-frame contract.
+pub mod raw_frame;
 /// The outward connection to the rendezvous service — what makes a duck reachable from off its
 /// own LAN. `docs/design/remote-access-design.md` §3.
 pub mod relay;

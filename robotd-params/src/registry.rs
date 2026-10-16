@@ -476,6 +476,11 @@ pub const REGISTRY: &[Entry] = &[
         "Video frame size and rate; 720p30 is the rung mediad was measured at",
     ),
     entry(
+        "media.camera_backend",
+        Kind::Choice(crate::CAMERA_BACKEND_LABELS),
+        "Camera ISP integration: rockchip or allwinner; restart mediad after changing",
+    ),
+    entry(
         "media.bitrate",
         Kind::OptionalInteger,
         "Starting video bitrate, bits/s — unset follows the quality",
