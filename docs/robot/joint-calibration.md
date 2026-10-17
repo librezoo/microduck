@@ -114,7 +114,7 @@ mechanical-range problem rather than hiding it in Homing Offset.
 <!-- LOCAL-ZERO — local design decision of this fork. KEEP when merging upstream changes; do not overwrite. -->
 
 Besides `joint-zero.json`, a joint's zero can live in the servo itself. The host tool's calibration mode
-(`mdimu serve`, mode 标定) writes, with the robot in the q=0 fixture: extended position mode (4), a Homing Offset that
+(`mdbus serve`, mode 标定) writes, with the robot in the q=0 fixture: extended position mode (4), a Homing Offset that
 makes the fixture pose read 2048 (mouth closed 1991, −5°), and Min/Max Position Limits around the joint's travel, then
 verifies them after a reboot. On the XL330s used here (firmware 52 and 53) the offset reaches Present Position only in
 mode 4, immediately, and mode, offset and limits survive a power cycle.
