@@ -109,18 +109,26 @@ this file; it is deliberately outside the capture command. EEPROM writes require
 torque OFF. Resolve a multi-turn discontinuity as a separate position-mode and
 mechanical-range problem rather than hiding it in Homing Offset.
 
-## Zero carried by the servo (local addition)
+## Zero carried by the servos (the KPower robot)
 
-<!-- LOCAL-ZERO — local design decision of this fork. KEEP when merging upstream changes; do not overwrite. -->
+On the KPower robot the zero lives in the servos themselves, not in a file. Every joint is in single-turn position
+mode (3) with Homing Offset 0 and position limits 0..4095, and with the robot held in its fixture the present pose is
+made each servo's zero with the KPower firmware's command (20 written to Protocol Type, register 13), so every joint
+reads 2047 there and keeps it through a power cycle. The host tool does all of it at once — torque off, a one-second
+stillness check, a register backup of every servo, mode 3 / offset 0 / limits, the zero of all fifteen joints with
+one Sync Write, a reboot and a read-back — from its calibration mode (`hdbus serve`, mode 标定) or as
+`hdbus servo robot-zero`. The zero is not a register: a backup cannot bring an old one back, only zeroing again in
+the fixture can.
 
-Besides `joint-zero.json`, a joint's zero can live in the servo itself. The host tool's calibration mode
-(`hdbus serve`, mode 标定) writes, with the robot in the q=0 fixture: extended position mode (4), a Homing Offset that
-makes the fixture pose read 2048 (mouth closed 1991, −5°), and Min/Max Position Limits around the joint's travel, then
-verifies them after a reboot. On the XL330s used here (firmware 52 and 53) the offset reaches Present Position only in
-mode 4, immediately, and mode, offset and limits survive a power cycle.
+The fixture holds every joint at model zero except the mouth, which is zeroed **closed**. Closed is −5° in the robot
+model, and `duck-control`'s `FIXTURE_POSE` table says so: a joint without a `joint-zero.json` entry reads its servo
+zero as its fixture pose, so the closed mouth reports −5° and model zero is commanded 5° open. The table is part of the
+robot model, not of the calibration; hdbus's robot view uses the same one.
 
-`robotd` accepts such a joint (XL330-M288, mode 4, drive mode 0, ordered limits): it keeps the servo's offset and limits
-instead of rewriting the flashing rig's offset, and a joint with both a saved zero and a servo zero is refused at startup.
-`robotctl calibrate zero` refuses while any joint carries its zero in the servo, and a missing servo is not adopted next
-to joints that do, because the new one would have no zero. The limits still refuse goals outside them (error 6), so they
-must stay outside the joint travel of the model.
+With the zero half a turn from the encoder seam (4095 → 0), every joint's travel stays inside one turn, wherever its
+horn sits, so nothing has to be shifted by whole turns at startup. `robotd` refuses a joint in extended position mode
+(4): that was the earlier scheme (mode 4 + Homing Offset, which the KPower servos add only in that mode), and such a
+joint has to be zeroed again. The Homing Offset `robotd` asserts is 0 on every joint, the knees included. A replacement
+servo arrives with the factory's zero; `robotd` adopts it and says so in the journal, and the robot has to be zeroed in
+its fixture again before the joint means anything. `joint-zero.json` above stays the way to calibrate a robot whose
+servos cannot hold their own zero; a joint listed there keeps the offset the file recorded.

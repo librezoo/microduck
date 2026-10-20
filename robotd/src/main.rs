@@ -5672,7 +5672,8 @@ fn dispatch(
                     zero_ticks: info.zero_ticks,
                     homing_offset_ticks: info.homing_offset_ticks,
                     single_turn_compatible: info.single_turn_compatible,
-                    servo_zero: info.servo_zero,
+                    // kept for clients that read it; no joint is zeroed the old way any more
+                    servo_zero: [false; proto::JOINT_NAMES.len()],
                     policy_enabled: state.policy_enabled,
                     homed: state.homed.load(Ordering::Relaxed),
                     body_imu_mount: state.body_imu_mount.get().map(|(mount, _)| *mount),
@@ -6242,7 +6243,6 @@ mod tests {
                 zero_ticks,
                 homing_offset_ticks,
                 single_turn_compatible: [true; NUM_JOINTS],
-                servo_zero: [false; NUM_JOINTS],
             },
         )));
         let response = dispatch(&state, &intents, proto::Id::Number(2), &call);

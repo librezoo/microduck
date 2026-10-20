@@ -77,16 +77,6 @@ fn candidate(info: &proto::CalibrationInfo, frames: &[Frame]) -> Result<(ZeroFil
             "fixture capture needs robotd --no-policy and no powered HOME pose".into(),
         ));
     }
-    // LOCAL-ZERO (keep when merging upstream): a joint zeroed inside the servo has nothing to capture here.
-    if let Some(index) = info.servo_zero.iter().position(|&own| own) {
-        return Err(Failure::new(
-            exit::REFUSED,
-            format!(
-                "{} carries its zero in the servo (extended position mode + Homing Offset); zero it with the host's calibration mode, or set it back to position mode (3) to use joint-zero.json",
-                proto::JOINT_NAMES[index]
-            ),
-        ));
-    }
     if let Some(index) = info.single_turn_compatible.iter().position(|ready| !ready) {
         return Err(Failure::new(
             exit::REFUSED,
@@ -492,31 +482,6 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
-
-    #[test]
-    fn a_joint_that_carries_its_zero_in_the_servo_is_not_captured() {
-        let mut info = proto::CalibrationInfo {
-            zero_ticks: [2048.0; 15],
-            homing_offset_ticks: [0; 15],
-            single_turn_compatible: [true; 15],
-            servo_zero: [false; 15],
-            policy_enabled: false,
-            homed: false,
-            body_imu_mount: None,
-            body_imu_mount_calibrated: false,
-        };
-        info.single_turn_compatible[4] = false;
-        info.servo_zero[4] = true;
-        let frames = (1..=FRAMES)
-            .map(|i| Frame {
-                t_ns: i as u64,
-                policy: "held".into(),
-                joints: [0.0; 15],
-            })
-            .collect::<Vec<_>>();
-        let failure = candidate(&info, &frames).err().expect("refused");
-        assert!(failure.message.contains("carries its zero in the servo"));
-    }
 
     #[test]
     fn loaded_offsets_are_inverted_before_recapturing_fixture_zero() {

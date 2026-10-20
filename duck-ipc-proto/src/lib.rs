@@ -485,7 +485,7 @@ pub const JSONRPC_VERSION: &str = "2.0";
 /// This fork's v43 (`robot.calibrationInfo`, `robot.sing`/`robot.singControl`, `SingParams.mouth_scale`) and
 /// upstream's v42–v44 (the vet book) were numbered independently. v45 is the union: everything above is
 /// present, and a client that needs one of those features asks for the method or field by name, not by version
-/// number. `CalibrationInfo.servo_zero` is additive (LOCAL-ZERO: joints whose zero lives in the servo).
+/// number. `CalibrationInfo.servo_zero` is additive and now always false (see the field).
 pub const API_VERSION: u32 = 45;
 
 /// The observation width every policy this robot family runs is built against.
@@ -633,9 +633,10 @@ pub struct CalibrationInfo {
     pub zero_ticks: [f64; JOINT_NAMES.len()],
     pub homing_offset_ticks: [i32; JOINT_NAMES.len()],
     pub single_turn_compatible: [bool; JOINT_NAMES.len()],
-    /// LOCAL-ZERO (local design decision, keep when merging upstream): joints whose zero is carried by the servo itself
-    /// (extended position mode + Homing Offset written by the host's calibration mode). `robotctl calibrate zero` does
-    /// not apply to them. Absent from a robotd older than this change.
+    /// Always false. It marked joints zeroed by the earlier scheme (extended position mode + Homing Offset), which
+    /// robotd now refuses; the robot's zero lives in the servos in single-turn mode, set on the fixture by hdbus, and
+    /// `zero_ticks` says where model zero is. Kept so that clients reading it do not break; remove it with the next
+    /// API version bump.
     #[serde(default)]
     pub servo_zero: [bool; JOINT_NAMES.len()],
     pub policy_enabled: bool,

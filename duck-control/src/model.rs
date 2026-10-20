@@ -150,26 +150,32 @@ pub const EXPECTED_REGISTERS: &[(&str, u8)] = &[
     ("shutdown", 52),
 ];
 
-/// `homing_offset` on the knees, in raw position counts (0.088° each, so −45°).
+/// The `homing_offset` a servo should hold, asserted alongside [`EXPECTED_REGISTERS`]: 0 on
+/// every joint.
 ///
-/// Every other joint is at 0. The value is `microduck_runtime`'s `setup_motor_rpi.py`, the
-/// flashing rig every servo on a built robot went through, so [`DEFAULT_POSITION`] and every
-/// policy assume it. A servo straight from the box arrives at 0, so a knee adopted without this
-/// reads and drives 45° off, with nothing in the journal to say why.
-pub const KNEE_HOMING_OFFSET: i32 = -512;
-
-/// Right and left knee: the only joints whose `homing_offset` is not 0.
-pub const KNEE_IDS: [u8; 2] = [13, 23];
-
-/// The `homing_offset` a servo should hold, asserted alongside [`EXPECTED_REGISTERS`]. It is
-/// kept apart from them because it is an `i32` and differs per joint.
-pub fn homing_offset(id: u8) -> i32 {
-    if KNEE_IDS.contains(&id) {
-        KNEE_HOMING_OFFSET
-    } else {
-        0
-    }
+/// The robot's zero lives in the servos themselves: single-turn position mode, Homing Offset 0,
+/// and the fixture pose made each servo's zero with the KPower command (the host's
+/// `hdbus servo robot-zero` / calibration mode), so every joint reads 2047 there. The KPower
+/// servos never add the Homing Offset in single-turn mode anyway (measured, firmware 52/53), so
+/// the knees' −512 of the original flashing rig (`setup_motor_rpi.py`) no longer means anything
+/// here; their zero is set on the fixture like every other joint's. A joint whose zero is in
+/// the robot's joint-zero file keeps whatever offset that file recorded (see `bus.rs`).
+pub fn homing_offset(_id: u8) -> i32 {
+    0
 }
+
+/// The model angle of every joint in the zeroing fixture, in radians.
+///
+/// The fixture holds every joint at model zero except the mouth, which is zeroed closed: closed
+/// is −5° in the robot model. The servo reads its zero (2047) there, so this table, not the
+/// calibration, says what that pose is. It applies to joints without an entry in the robot's
+/// joint-zero file (whose `zero_tick` already says where model zero is). hdbus's robot view has
+/// the same table (`FIXTURE_POSE_DEG`); keep them equal.
+pub const FIXTURE_POSE: [f64; NUM_JOINTS] = {
+    let mut pose = [0.0; NUM_JOINTS];
+    pose[MOUTH_INDEX] = -5.0 * std::f64::consts::PI / 180.0;
+    pose
+};
 
 /// Index of a joint by name. Linear scan over 15 entries, used at startup and in tests.
 pub fn joint_index(name: &str) -> Option<usize> {
@@ -275,18 +281,22 @@ mod tests {
         assert_eq!(want & INPUT_VOLTAGE, 0);
     }
 
-    /// The knee IDs are positional facts about [`JOINT_IDS`]; a renumbering that moved them
-    /// would put the offset on a hip.
+    /// The zero lives in the servos: no joint carries a Homing Offset any more.
     #[test]
-    fn only_the_knees_have_a_homing_offset() {
-        for (i, &id) in JOINT_IDS.iter().enumerate() {
-            let want = if JOINT_NAMES[i].ends_with("_knee") {
-                KNEE_HOMING_OFFSET
-            } else {
-                0
-            };
-            assert_eq!(homing_offset(id), want, "{}", JOINT_NAMES[i]);
+    fn no_joint_has_a_homing_offset() {
+        for &id in JOINT_IDS.iter() {
+            assert_eq!(homing_offset(id), 0);
         }
+    }
+
+    /// Only the mouth sits away from model zero in the fixture: closed, −5°.
+    #[test]
+    fn the_fixture_pose_is_model_zero_but_for_the_closed_mouth() {
+        for (i, &angle) in FIXTURE_POSE.iter().enumerate() {
+            let want = if i == MOUTH_INDEX { -5.0f64.to_radians() } else { 0.0 };
+            assert!((angle - want).abs() < 1e-12, "{}", JOINT_NAMES[i]);
+        }
+        assert_eq!(JOINT_NAMES[MOUTH_INDEX], "mouth");
     }
 
     /// `MOUTH_INDEX` is used to skip a slot when mapping 14 policy actions onto 15 joints.

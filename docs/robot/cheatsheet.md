@@ -34,7 +34,10 @@ the line about it says whether it answers now.
 
 ### Watching the loop
 
-To generate a joint-zero **candidate** while the robot is physically held in its
+On the KPower robot the zero lives in the servos: with the robot in its fixture,
+zero all fifteen joints from the host with `hdbus servo robot-zero` (or hdbus's
+calibration mode); see [joint calibration](joint-calibration.md). To generate a
+joint-zero **candidate** instead, while the robot is physically held in its
 q=0 fixture, run `robotctl calibrate zero --fixture-q0 --output PATH`. It reads
 through `robotd` and does not activate the result; see
 [joint calibration](joint-calibration.md). `robotctl calibrate imu --output PATH`

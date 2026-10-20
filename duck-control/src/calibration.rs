@@ -18,7 +18,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::io::{IoError, Result};
-use crate::model::{JOINT_IDS, JOINT_NAMES, NUM_JOINTS, joint_index};
+use crate::model::{FIXTURE_POSE, JOINT_IDS, JOINT_NAMES, NUM_JOINTS, joint_index};
 
 pub const RADIANS_PER_TICK: f64 = 2.0 * PI / 4096.0;
 
@@ -29,8 +29,6 @@ pub struct HardwareCalibrationInfo {
     pub zero_ticks: [f64; NUM_JOINTS],
     pub homing_offset_ticks: [i32; NUM_JOINTS],
     pub single_turn_compatible: [bool; NUM_JOINTS],
-    /// LOCAL-ZERO: joints whose zero lives in the servo (extended position mode + Homing Offset), see `bus.rs`.
-    pub servo_zero: [bool; NUM_JOINTS],
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,8 +153,19 @@ impl JointCalibration {
         self.homing_offsets[joint]
     }
 
+    /// Servo radians at model zero. A joint in the joint-zero file has its recorded zero; every
+    /// other joint carries its zero in the servo, where its reading is the fixture pose
+    /// ([`FIXTURE_POSE`]): model zero is that far from the servo's zero.
+    fn offset(&self, joint: usize) -> f64 {
+        if self.configured[joint] {
+            self.offsets[joint]
+        } else {
+            -FIXTURE_POSE[joint]
+        }
+    }
+
     pub fn zero_tick(&self, joint: usize) -> f64 {
-        2048.0 + self.offsets[joint] / RADIANS_PER_TICK
+        2048.0 + self.offset(joint) / RADIANS_PER_TICK
     }
 
     /// A replacement has a different installation zero even if its model and ID match.
@@ -174,7 +183,7 @@ impl JointCalibration {
 
     /// `servo_radians` follows rustypot: encoder 2048 means 0 radians.
     pub fn model_position(&self, joint: usize, servo_radians: f64) -> Result<f64> {
-        let model = servo_radians - self.offsets[joint];
+        let model = servo_radians - self.offset(joint);
         // Safety clamps logical targets to +/-pi. Reject a corrected reading outside
         // that range before it can become a hold target and be clamped to a different
         // physical pose. Crossing the encoder seam needs a mounting/range check.
@@ -190,7 +199,7 @@ impl JointCalibration {
     pub fn servo_targets(&self, model: &[f64; NUM_JOINTS]) -> Result<[f64; NUM_JOINTS]> {
         let mut servo = [0.0; NUM_JOINTS];
         for (joint, target) in model.iter().enumerate() {
-            servo[joint] = target + self.offsets[joint];
+            servo[joint] = target + self.offset(joint);
             if !servo[joint].is_finite() {
                 return Err(IoError::Bus(format!(
                     "non-finite target for {}",
@@ -261,6 +270,25 @@ mod tests {
         assert_eq!(c.configured_names(), ["left_hip_yaw"]);
         assert_eq!(c.model_position(1, 0.3).unwrap(), 0.3);
         assert_eq!(c.servo_targets(&[0.3; NUM_JOINTS]).unwrap()[1], 0.3);
+    }
+
+    /// The mouth carries its zero in the servo, zeroed closed: its zero reads −5° in the model,
+    /// and model zero is commanded 5° open. A joint-zero file entry for the mouth replaces that.
+    #[test]
+    fn the_servo_zero_of_the_mouth_is_its_closed_fixture_pose() {
+        use crate::model::MOUTH_INDEX;
+        let c = JointCalibration::default();
+        let five = 5.0f64.to_radians();
+        assert!((c.model_position(MOUTH_INDEX, 0.0).unwrap() + five).abs() < 1e-12);
+        assert!((c.servo_targets(&[0.0; NUM_JOINTS]).unwrap()[MOUTH_INDEX] - five).abs() < 1e-12);
+        assert!((c.zero_tick(MOUTH_INDEX) - (2048.0 + five / RADIANS_PER_TICK)).abs() < 1e-9);
+        // every other joint: model zero is the servo's zero
+        assert_eq!(c.model_position(0, 0.0).unwrap(), 0.0);
+        let filed = JointCalibration::from_json(
+            r#"{"joints":[{"name":"mouth","id":34,"zero_tick":2048.0}]}"#,
+        )
+        .unwrap();
+        assert_eq!(filed.model_position(MOUTH_INDEX, 0.0).unwrap(), 0.0);
     }
 
     #[test]
